@@ -1,0 +1,11 @@
+{
+  "name": "browser-test-agent",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev:server": "pnpm --filter @browser-test-agent/server start:dev",
+    "dev:extension": "pnpm --filter @browser-test-agent/extension dev",
+    "dev:web": "pnpm --filter @browser-test-agent/extension dev:web",
+    "build": "pnpm -r build"
+  }
+}

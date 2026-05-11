@@ -1,0 +1,26 @@
+{
+  "name": "@browser-test-agent/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm exec vite build --watch",
+    "dev:web": "pnpm exec vite",
+    "build": "pnpm exec vite build"
+  },
+  "dependencies": {
+    "@assistant-ui/react": "^0.14.0",
+    "@assistant-ui/react-markdown": "^0.14.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  }
+}

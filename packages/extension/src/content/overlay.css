@@ -1,0 +1,73 @@
+/* Playwright Test Runner - Page Overlay Styles */
+
+#pw-runner-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2147483647;
+}
+
+.pw-highlight {
+  position: absolute;
+  border: 2px solid #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
+  border-radius: 3px;
+  pointer-events: none;
+  transition: all 0.2s ease;
+  z-index: 2147483647;
+}
+
+.pw-highlight.click {
+  border-color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.pw-highlight.fill {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.pw-highlight.error {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.pw-action-badge {
+  position: absolute;
+  top: -24px;
+  left: 0;
+  padding: 2px 8px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+  background: #3b82f6;
+  border-radius: 3px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2147483647;
+}
+
+.pw-action-badge.click { background: #22c55e; }
+.pw-action-badge.fill { background: #f59e0b; }
+.pw-action-badge.error { background: #ef4444; }
+
+.pw-ripple {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(59, 130, 246, 0.4);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  animation: pw-ripple-anim 0.6s ease-out forwards;
+  z-index: 2147483647;
+}
+
+@keyframes pw-ripple-anim {
+  0% { width: 20px; height: 20px; opacity: 1; }
+  100% { width: 60px; height: 60px; opacity: 0; }
+}

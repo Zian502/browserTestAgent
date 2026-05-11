@@ -1,0 +1,8 @@
+node_modules
+.pnpm-store
+dist
+.agent-cache
+*.local
+.env
+.env.*
+.DS_Store

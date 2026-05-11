@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Browser Test Agent",
+  "version": "0.1.0",
+  "description": "页面测试 / SEO / PageSpeed 代理面板",
+  "action": {
+    "default_title": "Playwright Test Agent",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["http://localhost:3850/*", "http://127.0.0.1:3850/*"]
+}
