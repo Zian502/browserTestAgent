@@ -6,7 +6,11 @@ export type PlaywrightSessionLaunchOptions = {
   /** 放慢操作节奏（毫秒），便于肉眼跟随 */
   slowMoMs?: number
   navigationTimeoutMs?: number
-  waitUntil?: 'load' | 'domcontentloaded' | 'networkidle'
+  /**
+   * 默认 `domcontentloaded`：大量 SPA / 交易所站点的第三方脚本、长连接会导致 `load` 长时间不触发甚至永不触发。
+   * 需要与旧版行为一致时可显式传 `load`。
+   */
+  waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'commit'
 }
 
 type HeldSession = {
@@ -66,12 +70,13 @@ export async function openPageAndCaptureHtmlViaCDP(
   const browser = await launchChromeLikeBrowser(opts)
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
   const page = await context.newPage()
-  page.setDefaultNavigationTimeout(opts.navigationTimeoutMs ?? 45_000)
+  const navTimeout = opts.navigationTimeoutMs ?? 90_000
+  page.setDefaultNavigationTimeout(navTimeout)
 
   try {
     await page.goto(pageUrl, {
-      waitUntil: opts.waitUntil ?? 'load',
-      timeout: opts.navigationTimeoutMs ?? 45_000,
+      waitUntil: opts.waitUntil ?? 'domcontentloaded',
+      timeout: navTimeout,
     })
 
     const html = await getDocumentOuterHtmlViaCDP(page)

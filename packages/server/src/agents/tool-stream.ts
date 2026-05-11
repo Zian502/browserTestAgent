@@ -1,7 +1,7 @@
 import type { AgentName, StreamEvent } from './state'
 
 /**
- * 在 agent 节点内执行副作用并产出 `tool_call` / `tool_result`（与内置三工具事件结构一致，供 LLM 纲要等伪工具名使用）。
+ * 在 agent 节点内执行副作用并产出 `tool_start` / `tool_success` | `tool_failure`（与内置三工具事件一致，供 LLM 纲要等伪工具名使用）。
  */
 export async function runToolWithStreamEvents<T>(
   agentName: AgentName,
@@ -13,7 +13,7 @@ export async function runToolWithStreamEvents<T>(
   const t0 = Date.now()
   const streamEvents: StreamEvent[] = [
     {
-      type: 'tool_call',
+      type: 'tool_start',
       agentName,
       payload: { tool: toolName, ...callPayload, startedAt: t0 },
       timestamp: t0,
@@ -24,11 +24,10 @@ export async function runToolWithStreamEvents<T>(
     const t1 = Date.now()
     const durationMs = t1 - t0
     streamEvents.push({
-      type: 'tool_result',
+      type: 'tool_success',
       agentName,
       payload: {
         tool: toolName,
-        ok: true,
         durationMs,
         ...resultToPayload(result, durationMs),
       },
@@ -39,11 +38,10 @@ export async function runToolWithStreamEvents<T>(
     const err = String(e)
     const t1 = Date.now()
     streamEvents.push({
-      type: 'tool_result',
+      type: 'tool_failure',
       agentName,
       payload: {
         tool: toolName,
-        ok: false,
         durationMs: t1 - t0,
         error: err,
       },

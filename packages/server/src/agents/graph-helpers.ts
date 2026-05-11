@@ -22,7 +22,12 @@ export function updateStatus(plan: TaskPlan[], taskId: string, status: TaskPlan[
   return plan.map((t) => (t.id === taskId ? { ...t, status } : t))
 }
 
+/**
+ * 解析/报告等节点执行时，对应子任务在计划中应为 `running`；优先匹配 `running` 以免误用同 assignTo 的其它条目。
+ */
 export function findTaskId(plan: TaskPlan[], assignTo: AgentName): string | undefined {
+  const running = plan.find((t) => t.assignTo === assignTo && t.status === 'running')
+  if (running) return running.id
   return plan.find((t) => t.assignTo === assignTo)?.id
 }
 

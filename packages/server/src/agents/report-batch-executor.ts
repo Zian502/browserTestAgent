@@ -35,7 +35,7 @@ async function generateOneReportFile(
   }
 }
 
-/** `report` skill 调用；`writeText` 默认走 file-cache，可换为经 `write` 工具落盘以产生 tool_call 事件。 */
+/** `report` skill 调用；`writeText` 默认走 file-cache，可换为经 `write` 工具落盘以产生 tool_start / tool_success 事件。 */
 export async function executeReportBatchForTool(
   state: State,
   options?: {
@@ -45,7 +45,7 @@ export async function executeReportBatchForTool(
 ): Promise<{
   reports: Record<string, string>
   streamEvents: StreamEvent[]
-  /** 各类型生成结果，供 tool_result / 观测使用 */
+  /** 各类型生成结果，供 report_ready / 观测使用 */
   outcomes: Array<{ type: ReportType; ok: true; reportPath: string } | { type: ReportType; ok: false; error: string }>
 }> {
   const llmSpecs = options?.llmSpecs ?? {}

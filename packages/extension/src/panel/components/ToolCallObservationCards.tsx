@@ -1,11 +1,31 @@
 import { useMemo, useState, type CSSProperties } from 'react'
 import { useTaskStore, type AgentObservationLogEntry } from '../stores/task-store'
 import { MarkdownFromStaticText } from './MarkdownFromStaticText'
+import { RunTestCodeModal, type RunTestCodeModalParams } from './RunTestCodeModal'
 
-function toolKind(data: unknown): string | undefined {
+/** 与 `packages/server/src/agents/state.ts` 中 StreamEvent.type 对齐 */
+type InvocationStreamKind =
+  | 'tool_start'
+  | 'tool_success'
+  | 'tool_failure'
+  | 'skill_start'
+  | 'skill_success'
+  | 'skill_failure'
+
+function observationKind(data: unknown): InvocationStreamKind | undefined {
   if (!data || typeof data !== 'object') return undefined
   const k = (data as { kind?: string }).kind
-  return typeof k === 'string' ? k : undefined
+  if (
+    k === 'tool_start' ||
+    k === 'tool_success' ||
+    k === 'tool_failure' ||
+    k === 'skill_start' ||
+    k === 'skill_success' ||
+    k === 'skill_failure'
+  ) {
+    return k
+  }
+  return undefined
 }
 
 function extractTool(data: unknown): string {
@@ -15,69 +35,112 @@ function extractTool(data: unknown): string {
   return 'tool'
 }
 
-function resultOk(data: unknown): boolean {
-  return Boolean(data && typeof data === 'object' && (data as { ok?: unknown }).ok === true)
+function extractSkill(data: unknown): string {
+  if (data && typeof data === 'object' && 'skill' in data) {
+    return String((data as { skill?: unknown }).skill ?? 'skill')
+  }
+  return 'skill'
 }
 
-type MergedToolStatus = 'running' | 'done' | 'failed'
+type MergedCardStatus = 'running' | 'done' | 'failed'
 
-interface MergedToolCard {
+type InvocationRealm = 'tool' | 'skill'
+
+interface MergedInvocationCard {
   id: string
   agentName: string
-  tool: string
+  realm: InvocationRealm
+  /** 工具名或 skill id */
+  key: string
   label: string
-  status: MergedToolStatus
+  status: MergedCardStatus
   summary?: string
   callEntry?: AgentObservationLogEntry
   resultEntry?: AgentObservationLogEntry
 }
 
-/** 将同一轮 tool_call + tool_result 合并为一条；按 agentName + tool 与 FIFO 队列配对 */
-function mergeToolObservationLog(log: AgentObservationLogEntry[]): MergedToolCard[] {
-  const merged: MergedToolCard[] = []
-  const pending: { agentName: string; tool: string; rowIndex: number }[] = []
+interface PendingMatch {
+  agentName: string
+  realm: InvocationRealm
+  key: string
+  rowIndex: number
+}
+
+function startKindToRealm(k: InvocationStreamKind): InvocationRealm | null {
+  if (k === 'tool_start') return 'tool'
+  if (k === 'skill_start') return 'skill'
+  return null
+}
+
+function endKindToRealm(k: InvocationStreamKind): InvocationRealm | null {
+  if (k === 'tool_success' || k === 'tool_failure') return 'tool'
+  if (k === 'skill_success' || k === 'skill_failure') return 'skill'
+  return null
+}
+
+function extractKey(realm: InvocationRealm, data: unknown): string {
+  return realm === 'tool' ? extractTool(data) : extractSkill(data)
+}
+
+function isSuccessKind(k: InvocationStreamKind): boolean {
+  return k === 'tool_success' || k === 'skill_success'
+}
+
+/** 将 tool_start / skill_start 与同 agent 的 success、failure 配对合并 */
+function mergeInvocationObservationLog(log: AgentObservationLogEntry[]): MergedInvocationCard[] {
+  const merged: MergedInvocationCard[] = []
+  const pending: PendingMatch[] = []
 
   for (const entry of log) {
-    const k = toolKind(entry.data)
-    if (k === 'tool_call') {
-      const tool = extractTool(entry.data)
+    const k = observationKind(entry.data)
+    if (!k) continue
+
+    const startRealm = startKindToRealm(k)
+    if (startRealm) {
+      const key = extractKey(startRealm, entry.data)
       const rowIndex = merged.length
       merged.push({
         id: entry.id,
         agentName: entry.agentName,
-        tool,
+        realm: startRealm,
+        key,
         label: entry.label,
         status: 'running',
         summary: entry.summary,
         callEntry: entry,
       })
-      pending.push({ agentName: entry.agentName, tool, rowIndex })
-    } else if (k === 'tool_result') {
-      const tool = extractTool(entry.data)
-      const idx = pending.findIndex((p) => p.agentName === entry.agentName && p.tool === tool)
-      if (idx >= 0) {
-        const { rowIndex } = pending[idx]
-        pending.splice(idx, 1)
-        const row = merged[rowIndex]
-        const ok = resultOk(entry.data)
-        merged[rowIndex] = {
-          ...row,
-          status: ok ? 'done' : 'failed',
-          resultEntry: entry,
-          summary: entry.summary ?? row.summary,
-        }
-      } else {
-        const ok = resultOk(entry.data)
-        merged.push({
-          id: entry.id,
-          agentName: entry.agentName,
-          tool,
-          label: entry.label,
-          status: ok ? 'done' : 'failed',
-          summary: entry.summary,
-          resultEntry: entry,
-        })
+      pending.push({ agentName: entry.agentName, realm: startRealm, key, rowIndex })
+      continue
+    }
+
+    const endRealm = endKindToRealm(k)
+    if (!endRealm) continue
+
+    const key = extractKey(endRealm, entry.data)
+    const idx = pending.findIndex((p) => p.agentName === entry.agentName && p.realm === endRealm && p.key === key)
+    const ok = isSuccessKind(k)
+
+    if (idx >= 0) {
+      const { rowIndex } = pending[idx]
+      pending.splice(idx, 1)
+      const row = merged[rowIndex]
+      merged[rowIndex] = {
+        ...row,
+        status: ok ? 'done' : 'failed',
+        resultEntry: entry,
+        summary: entry.summary ?? row.summary,
       }
+    } else {
+      merged.push({
+        id: entry.id,
+        agentName: entry.agentName,
+        realm: endRealm,
+        key,
+        label: entry.label,
+        status: ok ? 'done' : 'failed',
+        summary: entry.summary,
+        resultEntry: entry,
+      })
     }
   }
 
@@ -94,13 +157,63 @@ function sliceJsonBody(data: unknown, max = 8000): string {
   }
 }
 
-function mergedCardMarkdown(card: MergedToolCard): string {
+function realmLabelZh(realm: InvocationRealm): string {
+  return realm === 'tool' ? '工具' : 'Skill'
+}
+
+/** 卡片标题：工具用 tool 名；Skill 优先展示友好 name，否则 skill id */
+function cardDisplayTitle(card: MergedInvocationCard): string {
+  if (card.realm === 'tool') return card.key
+  const raw = card.callEntry?.data ?? card.resultEntry?.data
+  if (raw && typeof raw === 'object' && 'name' in raw) {
+    const n = String((raw as { name?: unknown }).name ?? '').trim()
+    if (n) return n
+  }
+  return card.key
+}
+
+const RUN_TEST_CODE_SKILL_ID = 'run-test-code'
+
+function isRunTestCodeSkill(card: MergedInvocationCard): boolean {
+  return card.realm === 'skill' && card.key === RUN_TEST_CODE_SKILL_ID
+}
+
+/** 从 skill_start 等观测 `data`（含 `skill` + `input`）解析弹窗所需参数 */
+function extractRunTestCodeParamsFromObservationData(data: unknown): RunTestCodeModalParams | null {
+  if (!data || typeof data !== 'object') return null
+  const root = data as Record<string, unknown>
+  if (String(root.skill ?? '') !== RUN_TEST_CODE_SKILL_ID) return null
+  const input = root.input
+  if (!input || typeof input !== 'object') return null
+  const inp = input as Record<string, unknown>
+  const code = String(inp.code ?? '')
+  const sessionId = String(inp.sessionId ?? '').trim()
+  if (!sessionId || !code) return null
+  return {
+    code,
+    sessionId,
+    targetUrl: String(inp.targetUrl ?? ''),
+    timeoutMs:
+      inp.timeoutMs != null && Number.isFinite(Number(inp.timeoutMs)) ? Number(inp.timeoutMs) : 90_000,
+  }
+}
+
+function runTestCodeModalParamsFromCard(card: MergedInvocationCard): RunTestCodeModalParams | null {
+  if (!isRunTestCodeSkill(card)) return null
+  return (
+    extractRunTestCodeParamsFromObservationData(card.callEntry?.data) ??
+    extractRunTestCodeParamsFromObservationData(card.resultEntry?.data)
+  )
+}
+
+function mergedCardMarkdown(card: MergedInvocationCard): string {
+  const title = cardDisplayTitle(card)
   const lines: string[] = [
-    `## ${card.label}`,
+    `## ${title}`,
     '',
+    `- **类型**：${realmLabelZh(card.realm)}`,
     `- **Agent**：\`${card.agentName}\``,
-    `- **工具**：\`${card.tool}\``,
-    `- **状态**：\`${card.status === 'running' ? '执行中' : card.status === 'done' ? '已完成' : '失败'}\``,
+    `- **${card.realm === 'tool' ? '工具' : 'Skill'}**：\`${card.key}\``,
   ]
   if (card.summary) lines.push('', card.summary)
   if (card.callEntry?.data) {
@@ -191,50 +304,173 @@ const summaryStyle: CSSProperties = {
   overflowWrap: 'anywhere',
 }
 
-function StatusIcon(props: { status: MergedToolStatus }) {
+const realmBadge: CSSProperties = {
+  fontSize: 9,
+  fontWeight: 600,
+  color: '#6b7280',
+  textTransform: 'uppercase',
+  letterSpacing: '0.02em',
+}
+
+function statusAriaLabel(status: MergedCardStatus): string {
+  if (status === 'running') return '执行中'
+  if (status === 'done') return '已完成'
+  return '失败'
+}
+
+function StatusIcon(props: { status: MergedCardStatus }) {
   if (props.status === 'running') {
-    return <span style={spinner} aria-hidden />
+    return <span style={spinner} role="status" aria-label={statusAriaLabel('running')} />
   }
   if (props.status === 'done') {
     return (
-      <span style={iconDone} aria-hidden title="已完成">
+      <span style={iconDone} role="img" aria-label={statusAriaLabel('done')}>
         ✓
       </span>
     )
   }
   return (
-    <span style={iconFailed} aria-hidden title="失败">
+    <span style={iconFailed} role="img" aria-label={statusAriaLabel('failed')}>
       ✕
     </span>
   )
 }
 
-function ToolCallCard(props: { card: MergedToolCard }) {
+/** 与侧栏密度一致的小号「源码」图标 */
+function CodeFileGlyph(props: { size?: number }) {
+  const s = props.size ?? 14
+  return (
+    <svg
+      width={s}
+      height={s}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.85"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <path d="M9 13h6M9 17h4" />
+    </svg>
+  )
+}
+
+const codeActionBtn: CSSProperties = {
+  flexShrink: 0,
+  alignSelf: 'flex-start',
+  marginTop: 6,
+  marginRight: 6,
+  width: 28,
+  height: 28,
+  padding: 0,
+  boxSizing: 'border-box',
+  border: '1px solid #e4e4e7',
+  borderRadius: 7,
+  background: '#ffffff',
+  cursor: 'pointer',
+  color: '#52525b',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  lineHeight: 0,
+  outline: 'none',
+  transition: 'background 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease',
+}
+
+function InvocationCard(props: { card: MergedInvocationCard }) {
   const [open, setOpen] = useState(false)
+  const [codeModalOpen, setCodeModalOpen] = useState(false)
+  const [codeModalParams, setCodeModalParams] = useState<RunTestCodeModalParams | null>(null)
+  const [codeBtnHover, setCodeBtnHover] = useState(false)
+  const [codeBtnFocus, setCodeBtnFocus] = useState(false)
   const { card } = props
+
+  const runTestSnapshot = runTestCodeModalParamsFromCard(card)
+  const canOpenRunTestCodeModal = Boolean(runTestSnapshot)
+
+  function openRunTestCodeModal() {
+    const p = runTestCodeModalParamsFromCard(card)
+    if (!p) return
+    setCodeModalParams(p)
+    setCodeModalOpen(true)
+  }
+
+  function closeRunTestCodeModal() {
+    setCodeModalOpen(false)
+    setCodeModalParams(null)
+  }
 
   return (
     <div style={cardOuter}>
-      <button
-        type="button"
-        style={cardHeader}
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-busy={card.status === 'running'}
-      >
-        <div style={statusCol}>
-          <StatusIcon status={card.status} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={titleStyle}>{card.label}</div>
-            {card.summary ? <div style={summaryStyle}>{card.summary}</div> : null}
+      <div style={{ display: 'flex', alignItems: 'stretch', width: '100%', minWidth: 0 }}>
+        <button
+          type="button"
+          style={{
+            ...cardHeader,
+            flex: 1,
+            minWidth: 0,
+            width: 'auto',
+          }}
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-busy={card.status === 'running'}
+          aria-label={`${cardDisplayTitle(card)}，${statusAriaLabel(card.status)}`}
+        >
+          <div style={statusCol}>
+            <StatusIcon status={card.status} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span style={realmBadge}>{card.realm === 'tool' ? 'TOOL' : 'SKILL'}</span>
+                <div style={titleStyle}>{cardDisplayTitle(card)}</div>
+              </div>
+              {card.summary ? <div style={summaryStyle}>{card.summary}</div> : null}
+            </div>
           </div>
-        </div>
-        <span style={{ fontSize: 10, color: '#6b7280', flexShrink: 0, whiteSpace: 'nowrap', marginTop: 2 }}>
-          {open ? '▼' : '▶'}
-        </span>
-      </button>
+          <span style={{ fontSize: 10, color: '#6b7280', flexShrink: 0, whiteSpace: 'nowrap', marginTop: 2 }}>
+            {open ? '▼' : '▶'}
+          </span>
+        </button>
+        {canOpenRunTestCodeModal ? (
+          <button
+            type="button"
+            style={{
+              ...codeActionBtn,
+              background: codeBtnHover ? '#f4f4f5' : '#ffffff',
+              borderColor: codeBtnHover ? '#d4d4d8' : '#e4e4e7',
+              color: codeBtnHover ? '#2563eb' : '#52525b',
+              boxShadow: codeBtnFocus ? '0 0 0 2px #ffffff, 0 0 0 4px #93c5fd' : 'none',
+            }}
+            title="查看并执行测试代码"
+            aria-label="查看并执行测试代码"
+            onPointerEnter={() => setCodeBtnHover(true)}
+            onPointerLeave={() => setCodeBtnHover(false)}
+            onFocus={() => setCodeBtnFocus(true)}
+            onBlur={() => setCodeBtnFocus(false)}
+            onClick={(e) => {
+              e.preventDefault()
+              openRunTestCodeModal()
+            }}
+          >
+            <CodeFileGlyph size={14} />
+          </button>
+        ) : null}
+      </div>
+      <RunTestCodeModal open={codeModalOpen} onClose={closeRunTestCodeModal} params={codeModalParams} />
       {open ? (
-        <div style={{ padding: '0 10px 10px', borderTop: '1px solid #e5e7eb', minWidth: 0 }}>
+        <div
+          style={{
+            padding: '0 10px 10px',
+            borderTop: '1px solid #e5e7eb',
+            minWidth: 0,
+            maxHeight: 'min(45vh, 360px)',
+            overflowY: 'auto',
+            overflowX: 'auto',
+            overscrollBehavior: 'contain',
+          }}
+        >
           <MarkdownFromStaticText
             markdown={mergedCardMarkdown(card)}
             containerStyle={{
@@ -256,16 +492,16 @@ function ToolCallCard(props: { card: MergedToolCard }) {
 
 export function ToolCallObservationCards() {
   const observationLog = useTaskStore((s) => s.agentObservationLog)
-  const cards = useMemo(() => mergeToolObservationLog(observationLog), [observationLog])
+  const cards = useMemo(() => mergeInvocationObservationLog(observationLog), [observationLog])
 
   if (cards.length === 0) return null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
       <style>{`@keyframes tool-obs-card-spin { to { transform: rotate(360deg); } }`}</style>
-      <p style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', margin: 0 }}>工具调用</p>
+      <p style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', margin: 0 }}>工具与 Skill</p>
       {cards.map((c) => (
-        <ToolCallCard key={c.id} card={c} />
+        <InvocationCard key={`${c.id}-${c.realm}-${c.key}`} card={c} />
       ))}
     </div>
   )

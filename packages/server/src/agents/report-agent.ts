@@ -102,10 +102,35 @@ export async function reportAgentNode(state: State) {
     { llmSpecs, taskId },
   )
 
+  const reports = (reportOut['reports'] as Record<string, string>) ?? {}
+  const reportFailed = Boolean(reportOut['reportAgentFailed'])
+  const taskPlan = (reportOut['taskPlan'] as State['taskPlan']) ?? state.taskPlan
+
+  if (reportFailed) {
+    streamEvents.push({
+      type: 'agent_failed' as const,
+      agentName: 'reportAgent' as const,
+      taskId,
+      payload: { message: String(reportOut['reportAgentError'] ?? '报告生成失败') },
+      timestamp: Date.now(),
+    })
+  } else {
+    streamEvents.push({
+      type: 'agent_done' as const,
+      agentName: 'reportAgent' as const,
+      taskId,
+      payload: {
+        reports,
+        generatedTypes: Object.keys(reports),
+      },
+      timestamp: Date.now(),
+    })
+  }
+
   return {
     streamEvents,
-    reports: (reportOut['reports'] as Record<string, string>) ?? {},
-    taskPlan: (reportOut['taskPlan'] as State['taskPlan']) ?? state.taskPlan,
+    reports,
+    taskPlan,
     agentOutputs: { reportAgent: reportOut['agentOutput'] as AgentOutput },
   }
 }

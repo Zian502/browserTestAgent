@@ -1,10 +1,11 @@
-import { Body, Controller, Post, Res } from '@nestjs/common'
+import { BadRequestException, Body, Controller, Post, Res } from '@nestjs/common'
 import type { Response } from 'express'
 import { buildGraph } from '../agents/graph'
 import { BrowserTestState } from '../agents/state'
 import { isAcceptablePageUrl } from '../lib/page-url'
 import { disposePlaywrightSession } from '../lib/playwright-browser-session'
 import type { State, StreamEvent } from '../agents/state'
+import { executeCoreTool, PLAYWRIGHT_TOOL } from '../tools'
 
 /**
  * LangGraph `streamMode: 'updates'` 时，单步 chunk 形如 `{ mainAgent: { streamEvents, ... }, planAgent: {...} }`，
@@ -29,6 +30,34 @@ function extractStreamEventsFromGraphStreamChunk(chunk: unknown): StreamEvent[] 
 @Controller('api')
 export class AgentController {
   private graph = buildGraph()
+
+  /**
+   * 扩展侧「重新执行」run-test-code：在既有 Playwright CDP 会话上调用 `playwright` 工具的 `run_test`。
+   */
+  @Post('agent/run-test-code')
+  async runTestCode(
+    @Body()
+    body: {
+      sessionId?: string
+      code?: string
+      targetUrl?: string
+      timeoutMs?: number
+    },
+  ) {
+    const sessionId = String(body.sessionId ?? '').trim()
+    const code = String(body.code ?? '')
+    const targetUrl = String(body.targetUrl ?? '')
+    if (!sessionId) throw new BadRequestException('缺少 sessionId（需与当前 Playwright 会话一致）')
+    if (!code.trim()) throw new BadRequestException('缺少 code')
+    const out = await executeCoreTool(PLAYWRIGHT_TOOL, {
+      op: 'run_test',
+      sessionId,
+      code,
+      targetUrl,
+      timeoutMs: body.timeoutMs != null && Number.isFinite(Number(body.timeoutMs)) ? Number(body.timeoutMs) : 90_000,
+    })
+    return out
+  }
 
   @Post('agent/run')
   async run(

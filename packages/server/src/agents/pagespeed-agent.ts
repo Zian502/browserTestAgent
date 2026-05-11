@@ -1,5 +1,5 @@
 import type { State } from './state'
-import { pagespeedMcp } from '../mcp/pagespeed-mcp'
+import { pagespeedMcp } from '../mcps/pagespeed-mcp'
 import { findTaskId, updateStatus } from './graph-helpers'
 import { agentObservation } from './agent-observation'
 import { runMcpWithStreamEvents } from './tool-stream'

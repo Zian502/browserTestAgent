@@ -9,8 +9,7 @@ import {
 import { useTaskStore } from './stores/task-store'
 import { getPageContextForAgent, isAcceptablePageUrl, isExtensionRuntime } from '../lib/page-context'
 import { resolveLatestUserInput } from '../lib/user-intent-url'
-
-const API_BASE = import.meta.env.VITE_AGENT_API ?? 'http://localhost:3850'
+import { AGENT_API_BASE } from './agent-api-base'
 
 function agentLabel(name?: string) {
   const map: Record<string, string> = {
@@ -69,7 +68,7 @@ function createAdapter(): ChatModelAdapter {
           return
         }
 
-        const response = await fetch(`${API_BASE}/api/agent/run`, {
+        const response = await fetch(`${AGENT_API_BASE}/api/agent/run`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -139,74 +138,96 @@ function createAdapter(): ChatModelAdapter {
                 addReport(payload.reportType, payload.reportPath)
                 yield* bump(`📄 报告：**${payload.reportType}** → \`${payload.reportPath}\`\n\n`)
               }
-            } else if (event === 'tool_call') {
+            } else if (event === 'tool_start') {
               const payload = (data.payload ?? {}) as Record<string, unknown>
               const tool = String(payload.tool ?? 'tool')
               const page = payload.pageUrl != null ? String(payload.pageUrl) : ''
               const startedAt = payload.startedAt != null ? Number(payload.startedAt) : undefined
               pushAgentObservation({
                 agentName: String(data.agentName ?? 'mainAgent'),
-                label: `工具：${tool}`,
+                label: tool,
                 phase: 'start',
                 summary: page ? `目标 ${page}` : undefined,
-                data: { ...payload, kind: 'tool_call' },
+                data: { ...payload, kind: 'tool_start' },
               })
               yield* bump(
-                `\n🔧 **工具调用** \`${tool}\`${page ? ` · ${page}` : ''}${startedAt != null && !Number.isNaN(startedAt) ? ` · startedAt=${startedAt}` : ''}\n\n`,
+                `\n🔧 **工具开始** \`${tool}\`${page ? ` · ${page}` : ''}${startedAt != null && !Number.isNaN(startedAt) ? ` · startedAt=${startedAt}` : ''}\n\n`,
               )
-            } else if (event === 'tool_result') {
+            } else if (event === 'tool_success') {
               const payload = (data.payload ?? {}) as Record<string, unknown>
               const tool = String(payload.tool ?? 'tool')
-              const ok = payload.ok === true
               const ms = payload.durationMs != null ? Number(payload.durationMs) : undefined
-              const err = payload.error != null ? String(payload.error) : ''
               const len = payload.pageHtmlLength != null ? Number(payload.pageHtmlLength) : undefined
-              let toolSummary: string | undefined
-              if (ok) {
-                const parts: string[] = []
-                if (ms != null && !Number.isNaN(ms)) parts.push(`耗时 ${ms}ms`)
-                if (len != null && !Number.isNaN(len)) parts.push(`HTML 长度 ${len}`)
-                toolSummary = parts.length > 0 ? parts.join(' · ') : undefined
-              } else {
-                toolSummary = err ? err.slice(0, 200) : undefined
-              }
+              const parts: string[] = []
+              if (ms != null && !Number.isNaN(ms)) parts.push(`耗时 ${ms}ms`)
+              if (len != null && !Number.isNaN(len)) parts.push(`HTML 长度 ${len}`)
+              const toolSummary = parts.length > 0 ? parts.join(' · ') : undefined
               pushAgentObservation({
                 agentName: String(data.agentName ?? 'mainAgent'),
-                label: `工具：${tool}`,
-                phase: ok ? 'done' : 'failed',
+                label: `工具成功：${tool}`,
+                phase: 'done',
                 summary: toolSummary,
-                data: { ...payload, kind: 'tool_result' },
+                data: { ...payload, kind: 'tool_success' },
               })
               yield* bump(
-                `\n${ok ? '✅' : '❌'} **工具结果** \`${tool}\`${ms != null && !Number.isNaN(ms) ? ` · ${ms}ms` : ''}${len != null && !Number.isNaN(len) ? ` · HTML ${len} 字符` : ''}${!ok && err ? `\n${err}` : ''}\n\n`,
+                `\n✅ **工具成功** \`${tool}\`${ms != null && !Number.isNaN(ms) ? ` · ${ms}ms` : ''}${len != null && !Number.isNaN(len) ? ` · HTML ${len} 字符` : ''}\n\n`,
               )
-            } else if (event === 'skill_call') {
+            } else if (event === 'tool_failure') {
               const payload = (data.payload ?? {}) as Record<string, unknown>
-              const skill = String(payload.skill ?? 'skill')
-              const name = payload.name != null ? String(payload.name) : ''
+              const tool = String(payload.tool ?? 'tool')
+              const ms = payload.durationMs != null ? Number(payload.durationMs) : undefined
+              const err = payload.error != null ? String(payload.error) : ''
+              const toolSummary = err ? err.slice(0, 200) : undefined
               pushAgentObservation({
                 agentName: String(data.agentName ?? 'mainAgent'),
-                label: name ? `Skill：${name}` : `Skill：${skill}`,
+                label: `工具失败：${tool}`,
+                phase: 'failed',
+                summary: toolSummary,
+                data: { ...payload, kind: 'tool_failure' },
+              })
+              yield* bump(
+                `\n❌ **工具失败** \`${tool}\`${ms != null && !Number.isNaN(ms) ? ` · ${ms}ms` : ''}${err ? `\n${err}` : ''}\n\n`,
+              )
+            } else if (event === 'skill_start') {
+              const payload = (data.payload ?? {}) as Record<string, unknown>
+              const skill = String(payload.skill ?? 'skill')
+              const name = payload.name != null ? String(payload.name).trim() : ''
+              pushAgentObservation({
+                agentName: String(data.agentName ?? 'mainAgent'),
+                label: name ? name : skill,
                 phase: 'start',
                 summary: skill,
-                data: { ...payload, kind: 'skill_call' },
+                data: { ...payload, kind: 'skill_start' },
               })
-              yield* bump(`\n🧩 **Skill** \`${skill}\`${name ? `（${name}）` : ''}\n\n`)
-            } else if (event === 'skill_result') {
+              yield* bump(`\n🧩 **Skill 开始** \`${skill}\`${name ? `（${name}）` : ''}\n\n`)
+            } else if (event === 'skill_success') {
               const payload = (data.payload ?? {}) as Record<string, unknown>
               const skill = String(payload.skill ?? 'skill')
-              const ok = payload.ok === true
+              const ms = payload.durationMs != null ? Number(payload.durationMs) : undefined
+              pushAgentObservation({
+                agentName: String(data.agentName ?? 'mainAgent'),
+                label: `Skill 成功：${skill}`,
+                phase: 'done',
+                summary: ms != null && !Number.isNaN(ms) ? `耗时 ${ms}ms` : undefined,
+                data: { ...payload, kind: 'skill_success' },
+              })
+              yield* bump(
+                `\n✅ **Skill 成功** \`${skill}\`${ms != null && !Number.isNaN(ms) ? ` · ${ms}ms` : ''}\n\n`,
+              )
+            } else if (event === 'skill_failure') {
+              const payload = (data.payload ?? {}) as Record<string, unknown>
+              const skill = String(payload.skill ?? 'skill')
               const ms = payload.durationMs != null ? Number(payload.durationMs) : undefined
               const err = payload.error != null ? String(payload.error) : ''
               pushAgentObservation({
                 agentName: String(data.agentName ?? 'mainAgent'),
-                label: `Skill：${skill}`,
-                phase: ok ? 'done' : 'failed',
-                summary: ok && ms != null && !Number.isNaN(ms) ? `耗时 ${ms}ms` : err ? err.slice(0, 200) : undefined,
-                data: { ...payload, kind: 'skill_result' },
+                label: `Skill 失败：${skill}`,
+                phase: 'failed',
+                summary: err ? err.slice(0, 200) : undefined,
+                data: { ...payload, kind: 'skill_failure' },
               })
               yield* bump(
-                `\n${ok ? '✅' : '❌'} **Skill 结果** \`${skill}\`${ms != null && !Number.isNaN(ms) ? ` · ${ms}ms` : ''}${!ok && err ? `\n${err}` : ''}\n\n`,
+                `\n❌ **Skill 失败** \`${skill}\`${ms != null && !Number.isNaN(ms) ? ` · ${ms}ms` : ''}${err ? `\n${err}` : ''}\n\n`,
               )
             } else if (event === 'mcp_call') {
               const payload = (data.payload ?? {}) as Record<string, unknown>
