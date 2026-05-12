@@ -2,7 +2,7 @@
 
 ## 范围
 
-面板与后台契约：`agent-runtime`、SSE 解析、`VITE_AGENT_API`。改 API 形状时需同步改 `packages/server` 控制器。
+面板与后台契约：`agent-runtime`、SSE 解析、`VITE_AGENT_API`。`plan_created` 的 `payload` 为 **`TaskPlanMain[]`**（主任务 + `subTasks`），`task-store` 会归一化为 `mainTasks` 供 `TaskListCard` 分组展示。
 
 ## 构建
 

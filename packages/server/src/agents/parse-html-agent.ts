@@ -1,7 +1,7 @@
-import type { PageDSL, State, StreamEvent, TaskPlan } from './state'
+import type { PageDSL, State, StreamEvent } from './state'
 import { createChatLlm, hasChatLlm } from './llm-client'
 import { extractJsonObject, extractMessageText } from './llm-text'
-import { findTaskId, updateStatus } from './graph-helpers'
+import { findTaskId, updateStatus, findStepByTaskId } from './graph-helpers'
 import {
   PARSE_HTML_DSL_SYSTEM_PROMPT,
   PARSE_HTML_DSL_MULTI_FIRST_APPEND,
@@ -284,9 +284,30 @@ async function dslFromLlm(
   return { dsl, llmChunks: chunkCount }
 }
 
+async function persistDslSnapshot(
+  dsl: PageDSL,
+  cacheKey: string,
+  pageUrl: string,
+  skillCtx: SkillRunContext,
+): Promise<string | undefined> {
+  const key = cacheKey.trim()
+  if (!key) return undefined
+  const out = await runSkill('cache-file', skillCtx, {
+    kind: 'dsl_snapshot',
+    cacheKey: key,
+    pageUrl,
+    dsl,
+  })
+  if (out['ok'] === true && typeof out['relativePath'] === 'string') {
+    return out['relativePath'] as string
+  }
+  return undefined
+}
+
 export async function parseHtmlAgentNode(state: State) {
   const taskId = findTaskId(state.taskPlan, 'parseHtmlAgent')
-  const task = taskId ? state.taskPlan.find((t: TaskPlan) => t.id === taskId) : undefined
+  const task = taskId ? findStepByTaskId(state.taskPlan, taskId) : undefined
+  const dslCacheKey = task?.cacheKey?.trim() || `parse_dsl_${state.pageUrl.trim() || 'page'}_${taskId ?? 'default'}`
 
   const streamEvents: StreamEvent[] = []
   const emit = (e: StreamEvent) => {
@@ -305,6 +326,8 @@ export async function parseHtmlAgentNode(state: State) {
 
   const { dsl: fromLlm, llmChunks } = await dslFromLlm(sourceForLlm, state.pageUrl, pageHtml)
   const dsl: PageDSL = fromLlm ?? minimalDsl(state.pageUrl, pageHtml)
+
+  const dslRelativePath = await persistDslSnapshot(dsl, dslCacheKey, state.pageUrl, skillCtx)
 
   const chunked = htmlLlmSegments > 1
 
@@ -331,14 +354,16 @@ export async function parseHtmlAgentNode(state: State) {
           chunked,
           htmlLlmSegments,
           llmChunks,
-          taskCacheKey: task?.cacheKey ?? null,
+          dslCacheKey,
+          dslSnapshotRelativePath: dslRelativePath ?? null,
           llmParse: Boolean(fromLlm),
         },
       }),
       {
         type: 'agent_done' as const,
         agentName: 'parseHtmlAgent' as const,
-        payload: { elementsCount: dsl.elements.length },
+        taskId,
+        payload: { elementsCount: dsl.elements.length, dslRelativePath: dslRelativePath ?? null },
         timestamp: Date.now(),
       },
     ],

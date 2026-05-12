@@ -7,6 +7,11 @@ export interface RunTestInput {
   timeout?: number
   /** 若传入，则在同一浏览器页签中执行测试（与 Playwright CDP 会话一致） */
   existingPage?: Page
+  /**
+   * 注入到测试体内的第三个参数 `testEnv`（如 `testEnv.TEST_USERNAME`），来自服务端 `.env` 白名单。
+   * 使用 `testEnv` 而非 `env`，避免与生成代码中的 `const env = …` 等声明冲突。
+   */
+  env?: Record<string, string>
 }
 
 export interface RunTestResult {
@@ -16,24 +21,48 @@ export interface RunTestResult {
   skipped?: boolean
 }
 
-/** 从 @playwright/test 风格源码中取出第一个 `test(..., async (...) => { ... })` 的函数体（不含最外层大括号） */
-export function extractFirstTestCallbackBody(source: string): string | null {
-  const head = /\btest\s*(?:\.only\s*)?\(/.exec(source)
-  if (!head) return null
-  const arrow = source.indexOf('=>', head.index)
-  if (arrow === -1) return null
-  const bodyOpen = source.indexOf('{', arrow)
-  if (bodyOpen === -1 || bodyOpen < arrow) return null
-  let depth = 0
-  for (let i = bodyOpen; i < source.length; i++) {
-    const c = source[i]
-    if (c === '{') depth++
-    else if (c === '}') {
-      depth--
-      if (depth === 0) return source.slice(bodyOpen + 1, i)
+/** 从源码中依次解析每一段 `test(..., async (...) => { ... })` 的箭头函数体（不含最外层大括号） */
+export function extractAllTestCallbackBodies(source: string): string[] {
+  const bodies: string[] = []
+  let pos = 0
+  while (pos < source.length) {
+    const slice = source.slice(pos)
+    const head = /\btest\s*(?:\.only\s*)?\(/.exec(slice)
+    if (!head) break
+    const absHead = pos + head.index
+    const arrow = source.indexOf('=>', absHead)
+    if (arrow === -1) {
+      pos = absHead + 1
+      continue
     }
+    const bodyOpen = source.indexOf('{', arrow)
+    if (bodyOpen === -1 || bodyOpen < arrow) {
+      pos = absHead + 1
+      continue
+    }
+    let depth = 0
+    let i = bodyOpen
+    for (; i < source.length; i++) {
+      const c = source[i]
+      if (c === '{') depth++
+      else if (c === '}') {
+        depth--
+        if (depth === 0) {
+          bodies.push(source.slice(bodyOpen + 1, i))
+          pos = i + 1
+          break
+        }
+      }
+    }
+    if (i >= source.length) break
   }
-  return null
+  return bodies
+}
+
+/** @deprecated 使用 {@link extractAllTestCallbackBodies}；仅取第一段以兼容旧调用 */
+export function extractFirstTestCallbackBody(source: string): string | null {
+  const all = extractAllTestCallbackBodies(source)
+  return all[0] ?? null
 }
 
 export const playwrightRunner = {
@@ -60,8 +89,8 @@ export const playwrightRunner = {
     page.on('console', onConsole)
     page.on('pageerror', onPageError)
 
-    const body = extractFirstTestCallbackBody(input.code)
-    if (!body?.trim()) {
+    const bodies = extractAllTestCallbackBodies(input.code).filter((b) => b.trim())
+    if (bodies.length === 0) {
       page.off('console', onConsole)
       page.off('pageerror', onPageError)
       return {
@@ -75,24 +104,36 @@ export const playwrightRunner = {
       }
     }
 
+    const totalTimeout = input.timeout ?? 60_000
+    const perTestTimeout = Math.max(15_000, Math.floor(totalTimeout / bodies.length))
+    let passed = 0
+    let failed = 0
+
     const AsyncConstructor = Object.getPrototypeOf(async function () {}).constructor as new (
       ...args: string[]
     ) => (...args: unknown[]) => Promise<unknown>
 
-    const runner = new AsyncConstructor('page', 'expect', `"use strict";\n${body}`)
-    const timeout = input.timeout ?? 60_000
+    const injectedEnv = input.env && typeof input.env === 'object' ? input.env : {}
 
     try {
-      await Promise.race([
-        runner(page, expect) as Promise<unknown>,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`测试执行超过 ${timeout}ms`)), timeout),
-        ),
-      ])
-      return { passed: 1, failed: 0, logs, skipped: false }
-    } catch (e) {
-      logs.push(`[error] ${String(e)}`)
-      return { passed: 0, failed: 1, logs, skipped: false }
+      for (let bi = 0; bi < bodies.length; bi++) {
+        const body = bodies[bi]
+        logs.push(`[runner] 执行第 ${bi + 1}/${bodies.length} 段 test 体`)
+        const runner = new AsyncConstructor('page', 'expect', 'testEnv', `"use strict";\n${body}`)
+        try {
+          await Promise.race([
+            runner(page, expect, injectedEnv) as Promise<unknown>,
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`第 ${bi + 1} 段测试超过 ${perTestTimeout}ms`)), perTestTimeout),
+            ),
+          ])
+          passed++
+        } catch (e) {
+          failed++
+          logs.push(`[error] 第 ${bi + 1} 段: ${String(e)}`)
+        }
+      }
+      return { passed, failed, logs, skipped: false }
     } finally {
       page.off('console', onConsole)
       page.off('pageerror', onPageError)

@@ -2,21 +2,8 @@ import { Annotation, messagesStateReducer } from '@langchain/langgraph'
 import type { BaseMessage } from '@langchain/core/messages'
 import type { ReportType } from '../lib/report-generator'
 
-export interface TaskPlan {
-  id: string
-  title: string
-  type: 'parseHtml' | 'testCode' | 'seo' | 'pagespeed' | 'report'
-  assignTo: AgentName
-  dependencies: string[]
-  canParallel: boolean
-  status: 'pending' | 'running' | 'done' | 'failed' | 'skipped'
-  cacheKey?: string
-  /**
-   * 仅当 assignTo 为 reportAgent 时使用：本段流水线只生成这些类型的 HTML 报告
-   *（避免串行多段流水线时重复生成其它阶段已产出的报告）。
-   */
-  reportTypes?: ReportType[]
-}
+/** 流水线类型：与规划 LLM 输出及报告类型对齐 */
+export type PipelineKind = 'test' | 'seo' | 'perf'
 
 export type AgentName =
   | 'mainAgent'
@@ -26,6 +13,34 @@ export type AgentName =
   | 'seoAgent'
   | 'pagespeedAgent'
   | 'reportAgent'
+
+/** 单个子任务：对应一次 agent 执行，全局 id 在 flatten 后仍唯一 */
+export type TaskPlanStepType = 'parseHtml' | 'testCode' | 'seo' | 'pagespeed' | 'report'
+
+export interface TaskPlanStep {
+  id: string
+  title: string
+  type: TaskPlanStepType
+  assignTo: AgentName
+  dependencies: string[]
+  canParallel: boolean
+  status: 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+  cacheKey?: string
+  /**
+   * 仅当 assignTo 为 reportAgent：本段只生成这些类型的 HTML 报告
+   */
+  reportTypes?: ReportType[]
+}
+
+/**
+ * 主任务：由规划 LLM 生成标题与流水线类型；`subTasks` 为 agent **串行**执行顺序。
+ */
+export interface TaskPlanMain {
+  id: string
+  title: string
+  pipeline: PipelineKind
+  subTasks: TaskPlanStep[]
+}
 
 export interface PageDSL {
   url: string
@@ -94,7 +109,8 @@ export const BrowserTestState = Annotation.Root({
   /** mainAgent 调 Playwright 工具时使用 */
   playwrightHeadless: Annotation<boolean>(),
   playwrightSlowMoMs: Annotation<number>(),
-  taskPlan: Annotation<TaskPlan[]>(),
+  /** 主任务列表；每个主任务内含有序子任务（agent 执行顺序） */
+  taskPlan: Annotation<TaskPlanMain[]>(),
   nextAgent: Annotation<string>(),
   pageDSL: Annotation<PageDSL | null>(),
   agentOutputs: Annotation<Record<string, AgentOutput>>({

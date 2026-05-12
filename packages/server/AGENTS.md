@@ -9,6 +9,7 @@
 - `POST /api/agent/run`：SSE，勿在无流式消费场景误改为普通 JSON。
 - `POST /api/agent/run-test-code`：与扩展 `RunTestCodeModal` 对齐字段名。
 
-## 环境
+## 任务计划
 
-- `.env` 由 `load-env.ts` 向上查找；LLM 与 Playwright 相关变量见 `llm-client.ts` 与 README。
+- `state.taskPlan` 为 **`TaskPlanMain[]`**：每项含 `id`、`title`、`pipeline` 与有序 **`subTasks`（`TaskPlanStep[]`）**。
+- 调度与依赖判断使用 `graph-helpers.flattenTaskPlan()` 展平后的全局子任务 id。

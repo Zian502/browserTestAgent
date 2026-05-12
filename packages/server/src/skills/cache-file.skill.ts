@@ -4,12 +4,12 @@ import { invokeWriteTool } from './tool-invoker'
 import type { SkillDefinition } from './skill-types'
 
 /**
- * 在 `.agent-cache/html` 下写入 HTML 快照（经 `write` 工具）。
+ * 在 `.agent-cache` 下写入 HTML 快照（`html/`）或 PageDSL 快照（`dsl/*.json`，经 `write` 工具）。
  */
 export const cacheFileSkill: SkillDefinition = {
   id: 'cache-file',
   name: '缓存文件',
-  description: '将页面 HTML 快照写入受控缓存目录下的 html 子目录。',
+  description: '将页面 HTML 快照写入 html/，或将解析得到的 PageDSL 写入 dsl/。',
   toolsRequired: ['write'],
   async run(ctx, input) {
     const kind = String(input['kind'] ?? '')
@@ -21,6 +21,26 @@ export const cacheFileSkill: SkillDefinition = {
       }
       const rel = path.join('html', fileCacheService.htmlFilenameFromPageUrl(pageUrl))
       await invokeWriteTool(ctx.agentName, ctx.emit, rel, html)
+      return { ok: true, kind, relativePath: rel }
+    }
+    if (kind === 'dsl_snapshot') {
+      const cacheKey = String(input['cacheKey'] ?? '')
+      const pageUrl = String(input['pageUrl'] ?? ctx.state.pageUrl ?? '')
+      const dsl = input['dsl']
+      if (!cacheKey) return { ok: false, error: '缺少 cacheKey' }
+      const id = fileCacheService.artifactIdFromKey(cacheKey)
+      const rel = path.join('dsl', `${id}.json`)
+      const body = JSON.stringify(
+        {
+          cacheKey,
+          pageUrl,
+          savedAt: new Date().toISOString(),
+          dsl,
+        },
+        null,
+        2,
+      )
+      await invokeWriteTool(ctx.agentName, ctx.emit, rel, body)
       return { ok: true, kind, relativePath: rel }
     }
     return { ok: false, error: `未知 cache-file.kind：${kind}` }

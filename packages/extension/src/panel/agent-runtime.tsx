@@ -27,7 +27,8 @@ function agentLabel(name?: string) {
 function createAdapter(): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
-      const { reset, setTasksFromPlan, updateByAgent, addReport, pushAgentObservation } = useTaskStore.getState()
+      const { reset, setTasksFromPlan, updateByTaskId, updateByAgent, addReport, pushAgentObservation } =
+        useTaskStore.getState()
       reset()
 
       const userInput = resolveLatestUserInput(messages)
@@ -115,16 +116,22 @@ function createAdapter(): ChatModelAdapter {
               setTasksFromPlan(data.payload)
               yield* bump(`📋 已生成任务计划\n\n`)
             } else if (event === 'agent_start') {
+              const taskId = data.taskId != null ? String(data.taskId) : ''
               const name = data.agentName as string | undefined
-              if (name) updateByAgent(name, { status: 'running' })
+              if (taskId) updateByTaskId(taskId, { status: 'running' })
+              else if (name) updateByAgent(name, { status: 'running' })
               yield* bump(`\n⚙️ **${agentLabel(name)}** 开始…\n\n`)
             } else if (event === 'agent_done') {
+              const taskId = data.taskId != null ? String(data.taskId) : ''
               const name = data.agentName as string | undefined
-              if (name) updateByAgent(name, { status: 'done', result: data.payload })
+              if (taskId) updateByTaskId(taskId, { status: 'done', result: data.payload })
+              else if (name) updateByAgent(name, { status: 'done', result: data.payload })
               yield* bump(`✅ **${agentLabel(name)}** 完成\n\n`)
             } else if (event === 'agent_failed') {
+              const taskId = data.taskId != null ? String(data.taskId) : ''
               const name = data.agentName as string | undefined
-              if (name) updateByAgent(name, { status: 'failed' })
+              if (taskId) updateByTaskId(taskId, { status: 'failed' })
+              else if (name) updateByAgent(name, { status: 'failed' })
               yield* bump(`❌ **${agentLabel(name)}** 失败\n\n`)
             } else if (event === 'report_ready') {
               const payload = data.payload as

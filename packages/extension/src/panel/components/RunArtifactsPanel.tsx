@@ -11,7 +11,7 @@ function invocationObservationKind(data: unknown): string | undefined {
 /** 任务计划 + 工具调用卡片（挂在助手首段文本或等待占位内） */
 export function RunArtifactsPanel() {
   const hasArtifacts = useTaskStore((s) => {
-    if (s.tasks.length > 0) return true
+    if (s.mainTasks.some((m) => m.subTasks.length > 0)) return true
     return s.agentObservationLog.some((o) => {
       const k = invocationObservationKind(o.data)
       return (

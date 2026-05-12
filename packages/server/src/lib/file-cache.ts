@@ -9,6 +9,7 @@ class FileCacheService {
     await agentFileMkdirp(this.cacheDir)
     await agentFileMkdirp(path.join(this.cacheDir, 'reports'))
     await agentFileMkdirp(path.join(this.cacheDir, 'html'))
+    await agentFileMkdirp(path.join(this.cacheDir, 'dsl'))
     await agentFileMkdirp(path.join(this.cacheDir, 'testCode'))
   }
 
@@ -62,16 +63,28 @@ class FileCacheService {
   /**
    * 从任务标题 / 用户输入中提取简短英文文件名段（kebab-case），如 login、email-verify。
    * 无可用拉丁词时回退为 `test-{md5 前 8 位}`。
+   * 会过滤「spec / ts」等易与 `.spec.ts` 扩展名重复的噪声词，避免出现 `foo-spec-ts.spec.ts`。
    */
   testCodeSpecSlugFromTask(text: string, fallbackSeed: string): string {
     const raw = (text ?? '').trim()
     const withoutUrls = raw.replace(/https?:\/\/[^\s]+/gi, ' ')
     const tokens = withoutUrls.match(/[a-zA-Z][a-zA-Z0-9]*/g)
+    /** 易与 `.spec.ts` / 语言后缀重复的片段，避免 `foo-spec-ts.spec.ts` */
+    const skipToken = new Set([
+      'spec',
+      'ts',
+      'tsx',
+      'js',
+      'mjs',
+      'cjs',
+      'typescript',
+      'javascript',
+    ])
     let slug = ''
     if (tokens && tokens.length > 0) {
       slug = tokens
         .map((w) => w.toLowerCase())
-        .filter((w) => w.length >= 2 || tokens!.length === 1)
+        .filter((w) => (w.length >= 2 || tokens!.length === 1) && !skipToken.has(w))
         .slice(0, 8)
         .join('-')
         .replace(/-+/g, '-')
@@ -83,6 +96,8 @@ class FileCacheService {
       slug = `test-${h}`
     }
     slug = slug.replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '')
+    slug = slug.replace(/-spec-ts$/i, '').replace(/-spec$/i, '').replace(/-tsx?$/i, '')
+    slug = slug.replace(/-+/g, '-').replace(/^-|-$/g, '')
     return slug || 'test'
   }
 

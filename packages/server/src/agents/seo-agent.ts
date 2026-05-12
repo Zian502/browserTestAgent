@@ -62,6 +62,7 @@ export async function seoAgentNode(state: State) {
       {
         type: 'agent_done' as const,
         agentName: 'seoAgent' as const,
+        taskId,
         payload: { score },
         timestamp: Date.now(),
       },

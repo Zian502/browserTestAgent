@@ -9,5 +9,5 @@ alwaysApply: true
 - **常用命令**（在仓库根）：`pnpm run dev:server`、`pnpm run dev:extension`、`pnpm run build`。
 - **API 默认**：`http://localhost:3850`；扩展侧可用 `VITE_AGENT_API` 覆盖（见 `packages/extension/src/panel/agent-api-base.ts`）。
 - **勿提交**：`.env*`、`.agent-cache/`、`.pnpm-store/`、密钥；`.gitignore` 已覆盖部分路径。
-- **编排入口**：`packages/server/src/agents/graph.ts`；状态 `state.ts`；SSE 控制器 `gateway/agent.controller.ts`。
+- **编排入口**：`packages/server/src/agents/graph.ts`；状态 `state.ts`（`taskPlan` 为 **主任务 `TaskPlanMain[]`**，每项含 **`subTasks` 有序子任务**）；SSE 控制器 `gateway/agent.controller.ts`。
 - **文档**：`README.md` / `README.zh-CN.md`；Memories 种子：`MEMORIES.template.md`。

@@ -11,7 +11,7 @@ A **Chrome extension + NestJS backend** that turns natural language into **struc
 | Area | What stands out |
 |------|-----------------|
 | **Multi-agent graph** | LangGraph `StateGraph`: main dialog → planner → dispatcher → parse HTML / parallel workers / report → summary. Clear task states (`pending` → `running` → `done` / `failed`). |
-| **Parallel execution** | `testCodeAgent`, `seoAgent`, and `pagespeedAgent` run in a **single parallel batch** when dependencies allow; results merge back into one `taskPlan`. |
+| **Task plan** | `taskPlan` is a list of **main tasks** (`TaskPlanMain`), each with ordered **`subTasks`** (parse → execute → report); the dispatcher runs steps by global dependency order. |
 | **Playwright + CDP** | Optional **server-side Chromium** captures HTML and keeps a **session id** so generated tests run on the **same tab** as the capture flow. |
 | **Skill layer** | Reusable **skills** (get HTML, compress, cache, report, run test code) sit above core tools; stream events include `skill_*` for observability. |
 | **Rich streaming** | SSE from `POST /api/agent/run`; events cover agents, skills, tools, MCP-style PageSpeed calls, markdown `text`, and final `complete` with reports. |
@@ -69,7 +69,7 @@ browserTestAgent/
 
 ## Core concepts
 
-1. **State (`BrowserTestState`)** — Messages, `userInput`, `pageUrl`, `pageHtml`, Playwright flags, `taskPlan`, `pageDSL`, `agentOutputs`, `streamEvents`, `reports`.
+1. **State (`BrowserTestState`)** — Messages, `userInput`, `pageUrl`, `pageHtml`, Playwright flags, **`taskPlan` (`TaskPlanMain[]` with `subTasks`)**, `pageDSL`, `agentOutputs`, `streamEvents`, `reports`.
 2. **Planner** — Breaks work into typed tasks (`parseHtml`, `testCode`, `seo`, `pagespeed`, `report`) with dependencies and `canParallel`.
 3. **Dispatcher** — Schedules parse-first (needs HTML → DSL), then parallel specialists when `pageDSL` exists, then report.
 4. **Tools** — `read` / `write` (sandboxed paths) and `playwright` (`capture`, `refresh_outer_html`, `run_test`).

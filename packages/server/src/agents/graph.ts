@@ -1,5 +1,5 @@
 import { StateGraph, START, END, Command, MemorySaver } from '@langchain/langgraph'
-import { BrowserTestState, type State, type StreamEvent } from './state'
+import { BrowserTestState, type State, type StreamEvent, type TaskPlanMain, type TaskPlanStep } from './state'
 import { mainAgentNode } from './main-agent'
 import { planAgentNode } from './plan-agent'
 import { parseHtmlAgentNode } from './parse-html-agent'
@@ -7,17 +7,25 @@ import { testCodeAgentNode } from './test-code-agent'
 import { seoAgentNode } from './seo-agent'
 import { pagespeedAgentNode } from './pagespeed-agent'
 import { reportAgentNode } from './report-agent'
-import { markRunning, allTasksFinished, executablePendingTasks, findTaskId, updateStatus } from './graph-helpers'
+import {
+  markRunning,
+  allTasksFinished,
+  executablePendingTasks,
+  findTaskId,
+  updateStatus,
+  flattenTaskPlan,
+} from './graph-helpers'
 import { agentObservation } from './agent-observation'
 import { disposePlaywrightSession } from '../lib/playwright-browser-session'
 
-function pickNextExecutableTask(plan: State['taskPlan'], exec: State['taskPlan']): State['taskPlan'][number] {
-  const order = new Map(plan.map((t, i) => [t.id, i]))
-  return [...exec].sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))[0]
+function pickNextExecutableTask(plan: TaskPlanMain[], exec: TaskPlanStep[]): TaskPlanStep {
+  const order = flattenTaskPlan(plan).map((s) => s.id)
+  const idx = new Map(order.map((id, i) => [id, i]))
+  return [...exec].sort((a, b) => (idx.get(a.id) ?? 0) - (idx.get(b.id) ?? 0))[0]
 }
 
 async function dispatcherNode(state: State) {
-  if (state.taskPlan.length === 0) {
+  if (flattenTaskPlan(state.taskPlan).length === 0) {
     return new Command({ goto: END })
   }
 

@@ -7,7 +7,7 @@ alwaysApply: false
 # Server (`@browser-test-agent/server`)
 
 - **框架**：NestJS；启动 `src/main.ts`，默认端口 `3850`（`PORT`）。
-- **Agent 图**：`src/agents/graph.ts`；状态 `src/agents/state.ts`；各节点在 `agents/*-agent.ts`。
+- **Agent 图**：`src/agents/graph.ts`；状态 `src/agents/state.ts`（`taskPlan`: **`TaskPlanMain[]`**，每主任务内 **`TaskPlanStep[]` 子任务顺序**即执行顺序；用 `graph-helpers.flattenTaskPlan` 展平后做依赖与调度）；各节点在 `agents/*-agent.ts`。
 - **技能**：`src/skills/` + `registry.ts`；**工具**：`src/tools/`（`read` / `write` / `playwright`）。
 - **Playwright**：`src/lib/playwright-browser-session.ts`；子操作见 `tools/playwright.ts` 与 `tools/index.ts` 的 `executeCoreTool`。
 - **缓存**：`src/lib/file-cache.ts`，根目录通常为 `packages/server/.agent-cache/`（运行期写入）。

@@ -1,8 +1,10 @@
 import { invokePlaywrightTool } from './tool-invoker'
 import type { SkillDefinition } from './skill-types'
+import { runTestInjectedEnvKeyNames } from '../lib/run-test-env'
 
 /**
  * 在已有 Playwright CDP 会话页签中执行 `@playwright/test` 风格源码（经 `playwright` 工具 `run_test`）。
+ * 服务端将 `.env` 中白名单变量（默认 `TEST_USERNAME` / `TEST_PASSWORD`，见 `RUN_TEST_ENV_KEYS`）注入为测试体内的 **`testEnv`** 对象，不在工具流中传递具体值。
  */
 export const runTestCodeSkill: SkillDefinition = {
   id: 'run-test-code',
@@ -23,6 +25,8 @@ export const runTestCodeSkill: SkillDefinition = {
       code,
       targetUrl,
       timeoutMs,
+      /** 仅键名，供观测；具体值在 runner 内从 process.env 注入，不经过本 payload */
+      injectedEnvKeys: runTestInjectedEnvKeyNames(),
     })
     if (out['ok'] === true) {
       return {

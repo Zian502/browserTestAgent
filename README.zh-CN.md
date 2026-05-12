@@ -11,7 +11,7 @@
 | 维度 | 说明 |
 |------|------|
 | **多代理图** | 基于 LangGraph `StateGraph`：主对话 → 规划 → 调度 → HTML 解析 / 并行子任务 / 报告 → 收尾。任务状态清晰：`pending` → `running` → `done` / `failed`。 |
-| **并行执行** | 在依赖满足时，`testCodeAgent`、`seoAgent`、`pagespeedAgent` 在同一 **parallelBatch** 中并行跑，结果合并回统一 `taskPlan`。 |
+| **任务计划** | `taskPlan` 为 **主任务列表**（`TaskPlanMain`），每项含 **`subTasks` 串行子任务**（解析 → 执行 → 报告）；调度器按全局依赖顺序逐步执行。 |
 | **Playwright + CDP** | 可选 **服务端 Chromium** 抓取 HTML，并维护 **sessionId**，使生成测试与抓取流程 **共用同一页签**，贴近真实用户场景。 |
 | **技能层（Skills）** | 在 `read` / `write` / `playwright` 等 **工具** 之上封装可复用 **技能**（拉取 HTML、压缩、缓存、报告、执行测试代码等），流式事件含 `skill_*`，便于 UI 观测。 |
 | **流式体验** | `POST /api/agent/run` 使用 **SSE**；事件覆盖代理起止、技能、工具、类 MCP 的 PageSpeed 调用、Markdown `text`、以及带 `reports` 的 `complete`。 |
@@ -69,7 +69,7 @@ browserTestAgent/
 
 ## 核心概念
 
-1. **状态 `BrowserTestState`**：消息、`userInput`、`pageUrl`、`pageHtml`、Playwright 开关、`taskPlan`、`pageDSL`（页面结构化描述）、各代理输出、`streamEvents`、`reports`。
+1. **状态 `BrowserTestState`**：消息、`userInput`、`pageUrl`、`pageHtml`、Playwright 开关、**`taskPlan`（`TaskPlanMain[]`，含 `subTasks`）**、`pageDSL`、各代理输出、`streamEvents`、`reports`。
 2. **规划器（planAgent）**：把需求拆成带依赖与 `canParallel` 的任务类型：`parseHtml` / `testCode` / `seo` / `pagespeed` / `report`。
 3. **调度器（dispatcher）**：优先解析 HTML 得到 DSL；再并行跑测试/SEO/PageSpeed；最后汇总报告类任务。
 4. **工具（Tools）**：`read` / `write`（路径受控）与 `playwright`（`capture`、`refresh_outer_html`、`run_test`）。

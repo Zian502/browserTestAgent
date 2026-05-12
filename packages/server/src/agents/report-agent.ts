@@ -1,5 +1,5 @@
 import type { AgentOutput, State, StreamEvent } from './state'
-import { findTaskId } from './graph-helpers'
+import { findTaskId, flattenTaskPlan } from './graph-helpers'
 import { createChatLlm, hasChatLlm } from './llm-client'
 import { extractJsonObject, extractMessageText } from './llm-text'
 import { runToolWithStreamEvents } from './tool-stream'
@@ -66,7 +66,9 @@ async function llmOutlineForType(
 
 /** 按已完成子任务类型调用 LLM 生成报告纲要 JSON，再经 `report` skill 落盘并推送事件。 */
 export async function reportAgentNode(state: State) {
-  const runningReport = state.taskPlan.find((t) => t.assignTo === 'reportAgent' && t.status === 'running')
+  const runningReport = flattenTaskPlan(state.taskPlan).find(
+    (t) => t.assignTo === 'reportAgent' && t.status === 'running',
+  )
   const scope = runningReport?.reportTypes
 
   const tasksToReport = REPORT_KEYS.filter((t) => {

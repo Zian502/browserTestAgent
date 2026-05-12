@@ -1,5 +1,5 @@
-import { useState, type CSSProperties } from 'react'
-import { useTaskStore, type UiTask, type TaskStatus } from '../stores/task-store'
+import { useMemo, useState, type CSSProperties } from 'react'
+import { useTaskStore, type UiSubTask, type TaskStatus } from '../stores/task-store'
 import { MarkdownFromStaticText } from './MarkdownFromStaticText'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -141,7 +141,7 @@ const detailBox: CSSProperties = {
   paddingTop: 8,
 }
 
-function taskDetailMarkdown(task: UiTask): string {
+function taskDetailMarkdown(task: UiSubTask): string {
   const st = STATUS_LABEL[task.status] ?? task.status
   return [
     `## ${task.title}`,
@@ -152,71 +152,128 @@ function taskDetailMarkdown(task: UiTask): string {
   ].join('\n')
 }
 
+const mainSection: CSSProperties = {
+  borderRadius: 8,
+  border: '1px solid #e5e7eb',
+  overflow: 'hidden',
+  background: '#fff',
+}
+
+const mainTitleBar: CSSProperties = {
+  padding: '6px 8px',
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#1f2937',
+  background: '#f3f4f6',
+  borderBottom: '1px solid #e5e7eb',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  flexWrap: 'wrap',
+}
+
+const subTaskWrap: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  padding: '6px 6px 8px 8px',
+}
+
 export function TaskListCard() {
-  const tasks = useTaskStore((s) => s.tasks)
+  const mainTasks = useTaskStore((s) => s.mainTasks)
   const [listOpen, setListOpen] = useState(true)
   const [openTaskId, setOpenTaskId] = useState<string | null>(null)
 
-  if (tasks.length === 0) return null
+  const totalSteps = useMemo(
+    () => mainTasks.reduce((n, m) => n + m.subTasks.length, 0),
+    [mainTasks],
+  )
+
+  if (totalSteps === 0) return null
 
   return (
     <div style={cardOuter}>
       <style>{`@keyframes task-list-card-spin { to { transform: rotate(360deg); } }`}</style>
       <button type="button" style={cardHeader} onClick={() => setListOpen((v) => !v)} aria-expanded={listOpen}>
-        <span>执行计划 · {tasks.length} 项</span>
+        <span>
+          执行计划 · {mainTasks.length} 个主任务 · {totalSteps} 步子任务
+        </span>
         <span aria-hidden style={{ color: '#6b7280', fontSize: 11 }}>
           {listOpen ? '▼' : '▶'}
         </span>
       </button>
       {listOpen ? (
-        <div style={{ padding: '0 8px 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {tasks.map((task) => {
-            const expanded = openTaskId === task.id
-            return (
-              <div key={task.id} style={{ borderRadius: 8, border: '1px solid #e5e7eb', overflow: 'hidden' }}>
-                <button
-                  type="button"
-                  style={taskRowBtn}
-                  onClick={() => setOpenTaskId(expanded ? null : task.id)}
-                  aria-expanded={expanded}
-                  aria-busy={task.status === 'running'}
-                >
-                  <TaskStatusIcon status={task.status} />
+        <div style={{ padding: '0 8px 8px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {mainTasks.map((main) => (
+            <div key={main.id} style={mainSection}>
+              <div style={mainTitleBar}>
+                <span style={{ flex: 1, minWidth: 0 }}>{main.title}</span>
+                {main.pipeline ? (
                   <span
                     style={{
-                      flex: 1,
-                      minWidth: 0,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      lineHeight: '16px',
+                      fontSize: 10,
+                      fontWeight: 600,
+                      color: '#4b5563',
+                      background: '#e5e7eb',
+                      padding: '2px 6px',
+                      borderRadius: 4,
                     }}
                   >
-                    {task.title}
+                    {main.pipeline}
                   </span>
-                  <span style={{ fontSize: 10, color: '#6b7280', flexShrink: 0, lineHeight: '16px' }}>
-                    {STATUS_LABEL[task.status] ?? task.status}
-                  </span>
-                  <span aria-hidden style={{ color: '#9ca3af', fontSize: 10, lineHeight: '16px', flexShrink: 0 }}>
-                    {expanded ? '▼' : '▶'}
-                  </span>
-                </button>
-                {expanded ? (
-                  <div style={detailBox}>
-                    <MarkdownFromStaticText
-                      markdown={taskDetailMarkdown(task)}
-                      containerStyle={{
-                        fontSize: 12,
-                        lineHeight: 1.55,
-                        color: '#18181b',
-                        wordBreak: 'break-word',
-                      }}
-                    />
-                  </div>
                 ) : null}
               </div>
-            )
-          })}
+              <div style={subTaskWrap}>
+                {main.subTasks.map((task) => {
+                  const expanded = openTaskId === task.id
+                  return (
+                    <div key={task.id} style={{ borderRadius: 8, border: '1px solid #e5e7eb', overflow: 'hidden' }}>
+                      <button
+                        type="button"
+                        style={taskRowBtn}
+                        onClick={() => setOpenTaskId(expanded ? null : task.id)}
+                        aria-expanded={expanded}
+                        aria-busy={task.status === 'running'}
+                      >
+                        <TaskStatusIcon status={task.status} />
+                        <span
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            lineHeight: '16px',
+                          }}
+                        >
+                          {task.title}
+                        </span>
+                        <span style={{ fontSize: 10, color: '#6b7280', flexShrink: 0, lineHeight: '16px' }}>
+                          {STATUS_LABEL[task.status] ?? task.status}
+                        </span>
+                        <span aria-hidden style={{ color: '#9ca3af', fontSize: 10, lineHeight: '16px', flexShrink: 0 }}>
+                          {expanded ? '▼' : '▶'}
+                        </span>
+                      </button>
+                      {expanded ? (
+                        <div style={detailBox}>
+                          <MarkdownFromStaticText
+                            markdown={taskDetailMarkdown(task)}
+                            containerStyle={{
+                              fontSize: 12,
+                              lineHeight: 1.55,
+                              color: '#18181b',
+                              wordBreak: 'break-word',
+                            }}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       ) : null}
     </div>

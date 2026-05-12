@@ -9,6 +9,7 @@ import {
   type PlaywrightSessionLaunchOptions,
 } from '../lib/playwright-browser-session'
 import { playwrightRunner } from '../lib/playwright-runner'
+import { buildRunTestInjectedEnv } from '../lib/run-test-env'
 
 export const PLAYWRIGHT_TOOL = 'playwright' as const
 
@@ -179,6 +180,7 @@ export async function executePlaywrightCoreTool(input: PlaywrightCoreInput): Pro
         targetUrl: rt.targetUrl,
         timeout: rt.timeoutMs ?? 90_000,
         existingPage: page,
+        env: buildRunTestInjectedEnv(),
       })
       return {
         op: 'run_test',

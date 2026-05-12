@@ -1,10 +1,11 @@
-import type { AgentOutput, State, StreamEvent, TaskPlan } from './state'
+import type { AgentOutput, State, StreamEvent } from './state'
 import { createChatLlm, hasChatLlm } from './llm-client'
 import { fileCacheService } from '../lib/file-cache'
 import { extractMessageText } from './llm-text'
-import { findTaskId, updateStatus } from './graph-helpers'
+import { findTaskId, updateStatus, findStepByTaskId } from './graph-helpers'
 import { TEST_CODE_AGENT_SYSTEM_PROMPT, buildTestCodeUserMessage } from './prompts/test-code-agent.prompt'
 import { agentObservation } from './agent-observation'
+import { buildRunTestInjectedEnv } from '../lib/run-test-env'
 import { runSkill } from '../skills'
 
 function extractCode(raw: string): string {
@@ -13,9 +14,19 @@ function extractCode(raw: string): string {
   return raw.trim()
 }
 
+/** 将已注入键上的 `env.XXX` 改为 `testEnv.XXX`，兼容旧提示词并避免与 `const env` 冲突 */
+function rewriteInjectedEnvAccessors(code: string): string {
+  let out = code
+  for (const key of Object.keys(buildRunTestInjectedEnv())) {
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    out = out.replace(new RegExp(`\\benv\\.${escaped}\\b`, 'g'), `testEnv.${key}`)
+  }
+  return out
+}
+
 export async function testCodeAgentNode(state: State) {
   const taskId = findTaskId(state.taskPlan, 'testCodeAgent')
-  const task = taskId ? state.taskPlan.find((t: TaskPlan) => t.id === taskId) : undefined
+  const task = taskId ? findStepByTaskId(state.taskPlan, taskId) : undefined
   const cacheKey = task?.cacheKey
 
   const dsl = state.pageDSL
@@ -38,7 +49,7 @@ export async function testCodeAgentNode(state: State) {
         }),
       },
     ])
-    code = extractCode(extractMessageText(fullCodeResp.content))
+    code = rewriteInjectedEnvAccessors(extractCode(extractMessageText(fullCodeResp.content)))
   }
 
   const streamEvents: StreamEvent[] = []
@@ -118,6 +129,7 @@ export async function testCodeAgentNode(state: State) {
       {
         type: 'agent_done' as const,
         agentName: 'testCodeAgent' as const,
+        taskId,
         payload: { passed: testResult.passed, failed: testResult.failed },
         timestamp: Date.now(),
       },

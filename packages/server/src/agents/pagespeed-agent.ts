@@ -61,6 +61,7 @@ export async function pagespeedAgentNode(state: State) {
       {
         type: 'agent_done' as const,
         agentName: 'pagespeedAgent' as const,
+        taskId,
         payload: { mobileScore: data.mobile.score, desktopScore: data.desktop.score },
         timestamp: Date.now(),
       },
