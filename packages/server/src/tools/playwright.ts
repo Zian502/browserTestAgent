@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto'
+import type { Page } from 'playwright'
 import {
+  createHeldSessionBlankPage,
+  disposePlaywrightSession,
   openPageAndCaptureHtmlViaCDP,
   getPlaywrightSessionPage,
   refreshSessionPageHtmlViaCDP,
@@ -66,7 +69,8 @@ export type PlaywrightCoreInput =
   | { op: 'refresh_outer_html'; sessionId: string }
   | {
       op: 'run_test'
-      sessionId: string
+      /** 空串或未传：启动临时浏览器页并可选先导航 `targetUrl` */
+      sessionId?: string
       code: string
       targetUrl: string
       timeoutMs?: number
@@ -127,12 +131,53 @@ export async function executePlaywrightCoreTool(input: PlaywrightCoreInput): Pro
         return { op: 'refresh_outer_html', ok: false, error: String(e), durationMs: Date.now() - t0 }
       }
     }
+    if (input.op !== 'run_test') {
+      throw new Error(`未知 Playwright 子操作：${(input as { op?: string }).op}`)
+    }
+    const rt = input as Extract<PlaywrightCoreInput, { op: 'run_test' }>
+
+    const rawSid = (rt.sessionId ?? '').trim()
+    const sid = rawSid || randomUUID()
+    /** 本次会话为临时新建（省略 sessionId，或传入的 id 在服务端已不存在），须在 finally 里 dispose */
+    let disposeTemporarySession = !rawSid
+    let page: Page
+
+    async function gotoTargetOrFail(): Promise<PlaywrightCoreResult | null> {
+      const url = rt.targetUrl.trim()
+      if (!url) return null
+      try {
+        await page.goto(url, {
+          waitUntil: 'domcontentloaded',
+          timeout: rt.timeoutMs ?? 90_000,
+        })
+        return null
+      } catch (e) {
+        await disposePlaywrightSession(sid).catch(() => {})
+        return { op: 'run_test', ok: false, error: String(e), durationMs: Date.now() - t0 }
+      }
+    }
+
+    if (!rawSid) {
+      page = await createHeldSessionBlankPage(sid, {})
+      const early = await gotoTargetOrFail()
+      if (early) return early
+    } else {
+      const held = getPlaywrightSessionPage(sid)
+      if (held) {
+        page = held
+      } else {
+        disposeTemporarySession = true
+        page = await createHeldSessionBlankPage(sid, {})
+        const early = await gotoTargetOrFail()
+        if (early) return early
+      }
+    }
+
     try {
-      const page = getPlaywrightSessionPage(input.sessionId.trim())
       const testResult = await playwrightRunner.execute({
-        code: input.code,
-        targetUrl: input.targetUrl,
-        timeout: input.timeoutMs ?? 90_000,
+        code: rt.code,
+        targetUrl: rt.targetUrl,
+        timeout: rt.timeoutMs ?? 90_000,
         existingPage: page,
       })
       return {
@@ -146,6 +191,8 @@ export async function executePlaywrightCoreTool(input: PlaywrightCoreInput): Pro
       }
     } catch (e) {
       return { op: 'run_test', ok: false, error: String(e), durationMs: Date.now() - t0 }
+    } finally {
+      if (disposeTemporarySession) await disposePlaywrightSession(sid).catch(() => {})
     }
   })
 }

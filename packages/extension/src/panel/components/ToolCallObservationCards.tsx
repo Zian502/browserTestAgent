@@ -336,24 +336,22 @@ function StatusIcon(props: { status: MergedCardStatus }) {
   )
 }
 
-/** 与侧栏密度一致的小号「源码」图标 */
-function CodeFileGlyph(props: { size?: number }) {
+/** 与侧栏密度一致：窗口 + 播放，表示「打开并执行测试代码」 */
+function RunTestCodeGlyph(props: { size?: number }) {
   const s = props.size ?? 14
   return (
-    <svg
-      width={s}
-      height={s}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.85"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <path d="M9 13h6M9 17h4" />
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect
+        x="4.25"
+        y="4.75"
+        width="15.5"
+        height="14.5"
+        rx="2.25"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <path d="M10.5 10v4l3.5-2-3.5-2z" fill="currentColor" />
     </svg>
   )
 }
@@ -443,8 +441,8 @@ function InvocationCard(props: { card: MergedInvocationCard }) {
               color: codeBtnHover ? '#2563eb' : '#52525b',
               boxShadow: codeBtnFocus ? '0 0 0 2px #ffffff, 0 0 0 4px #93c5fd' : 'none',
             }}
-            title="查看并执行测试代码"
-            aria-label="查看并执行测试代码"
+            title="打开编辑器并执行测试代码"
+            aria-label="打开编辑器并执行测试代码"
             onPointerEnter={() => setCodeBtnHover(true)}
             onPointerLeave={() => setCodeBtnHover(false)}
             onFocus={() => setCodeBtnFocus(true)}
@@ -454,7 +452,7 @@ function InvocationCard(props: { card: MergedInvocationCard }) {
               openRunTestCodeModal()
             }}
           >
-            <CodeFileGlyph size={14} />
+            <RunTestCodeGlyph size={14} />
           </button>
         ) : null}
       </div>

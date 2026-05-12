@@ -9,7 +9,7 @@ export const PLAN_AGENT_SYSTEM_PROMPT = `你是浏览器端测试与站点分析
 
 ## TaskPlan 字段
 - id：必须使用下列**固定 id**之一（勿发明其它 id）：task_parse、task_test、task_seo、task_perf、task_report
-- title：面向用户的简短中文标题，**必须结合用户真实需求改写**（勿照搬模板句）
+- title：面向用户的简短中文标题，**必须结合用户真实需求改写**（勿照搬模板句）。对 **task_test**，请在标题末尾用括号附上 **2～6 个英文单词的 kebab-case 关键词**（如「…（login-modal）」「…（email-verify）」），用于生成缓存测试文件 \`*.spec.ts\` 名；若用户已用英文描述意图，可直接提炼为关键词。
 - type：与 id 对应 — task_parse→parseHtml，task_test→testCode，task_seo→seo，task_perf→pagespeed，task_report→report
 - assignTo：task_parse→parseHtmlAgent，task_test→testCodeAgent，task_seo→seoAgent，task_perf→pagespeedAgent，task_report→reportAgent
 - dependencies：字符串数组，元素必须是**本计划中会出现的**其它任务 id

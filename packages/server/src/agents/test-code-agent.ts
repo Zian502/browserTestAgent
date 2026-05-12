@@ -120,6 +120,7 @@ export async function testCodeAgentNode(state: State) {
   await fileCacheService.persistTestCodeArtifacts({
     cacheKey: persistKey,
     userInput: state.userInput,
+    taskTitle: task?.title,
     pageUrl: state.pageUrl,
     code,
     passed: testResult.passed,

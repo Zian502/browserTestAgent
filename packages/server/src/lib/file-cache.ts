@@ -1,6 +1,12 @@
 import * as path from 'path'
 import * as crypto from 'crypto'
-import { agentFileMkdirp, agentFileReadText, agentFileUnlinkQuiet, agentFileWriteText } from './agent-files'
+import {
+  agentFileMkdirp,
+  agentFileReadText,
+  agentFileUnlinkQuiet,
+  agentFileWriteText,
+  agentFileExists,
+} from './agent-files'
 
 interface CacheEntry<T> {
   data: T
@@ -51,6 +57,44 @@ class FileCacheService {
 
   artifactIdFromKey(key: string): string {
     return crypto.createHash('md5').update(key).digest('hex')
+  }
+
+  /**
+   * 从任务标题 / 用户输入中提取简短英文文件名段（kebab-case），如 login、email-verify。
+   * 无可用拉丁词时回退为 `test-{md5 前 8 位}`。
+   */
+  testCodeSpecSlugFromTask(text: string, fallbackSeed: string): string {
+    const raw = (text ?? '').trim()
+    const withoutUrls = raw.replace(/https?:\/\/[^\s]+/gi, ' ')
+    const tokens = withoutUrls.match(/[a-zA-Z][a-zA-Z0-9]*/g)
+    let slug = ''
+    if (tokens && tokens.length > 0) {
+      slug = tokens
+        .map((w) => w.toLowerCase())
+        .filter((w) => w.length >= 2 || tokens!.length === 1)
+        .slice(0, 8)
+        .join('-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 56)
+    }
+    if (!slug || slug.length < 2) {
+      const h = crypto.createHash('md5').update(fallbackSeed).digest('hex').slice(0, 8)
+      slug = `test-${h}`
+    }
+    slug = slug.replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '')
+    return slug || 'test'
+  }
+
+  private async resolveTestCodeSpecRelativePath(slug: string, cacheKey: string): Promise<string> {
+    const dir = path.join(this.cacheDir, 'testCode')
+    const primary = `${slug}.spec.ts`
+    const primaryAbs = path.join(dir, primary)
+    if (!(await agentFileExists(primaryAbs))) {
+      return path.join('testCode', primary)
+    }
+    const suffix = this.artifactIdFromKey(cacheKey).slice(0, 8)
+    return path.join('testCode', `${slug}-${suffix}.spec.ts`)
   }
 
   private getFilePath(key: string) {
@@ -130,23 +174,28 @@ class FileCacheService {
   async persistTestCodeArtifacts(opts: {
     cacheKey: string
     userInput: string
+    /** 任务计划中的标题（常与 userInput 互补，用于生成 *.spec.ts 名） */
+    taskTitle?: string
     pageUrl: string
     code: string
     passed: number
     failed: number
     skipped?: boolean
-  }): Promise<{ tsRelative: string; manifestRelative: string }> {
+  }): Promise<{ tsRelative: string; manifestRelative: string; specSlug: string }> {
     const id = this.artifactIdFromKey(opts.cacheKey)
-    const tsRel = path.join('testCode', `${id}.ts`)
+    const slugSource = [opts.taskTitle, opts.userInput].filter(Boolean).join(' ')
+    const specSlug = this.testCodeSpecSlugFromTask(slugSource, opts.cacheKey)
+    const tsRel = await this.resolveTestCodeSpecRelativePath(specSlug, opts.cacheKey)
+    const fileLabel = path.basename(tsRel)
     const ck = opts.cacheKey.length > 240 ? `${opts.cacheKey.slice(0, 240)}…` : opts.cacheKey
     const pu = opts.pageUrl.replace(/\*\//g, '* /')
     const ui = opts.userInput.replace(/\r?\n/g, ' ').replace(/\*\//g, '* /').slice(0, 480)
-    const header = `/**\n * testCodeAgent 生成（${new Date().toISOString()}）\n * cacheKey: ${ck}\n * pageUrl: ${pu}\n * userInput: ${ui}\n */\n\n`
+    const header = `/**\n * testCodeAgent 生成（${new Date().toISOString()}）\n * specSlug: ${specSlug}\n * artifactId: ${id}\n * cacheKey: ${ck}\n * pageUrl: ${pu}\n * userInput: ${ui}\n */\n\n`
     await this.writeFile(tsRel, `${header}${opts.code}`)
 
     const manifestRel = path.join('testCode', 'MANIFEST.md')
     const fullManifest = path.join(this.cacheDir, manifestRel)
-    const title = `# testCode 生成记录\n\n> 测试任务描述与 ${id}.ts 的对应关系（追加式）\n\n`
+    const title = `# testCode 生成记录\n\n> 测试任务与 \`*.spec.ts\` 文件（追加式）\n\n`
     let prev = ''
     try {
       prev = await agentFileReadText(fullManifest)
@@ -154,19 +203,20 @@ class FileCacheService {
       prev = ''
     }
     const fragment = [
-      `## ${new Date().toISOString()} — ${id}`,
+      `## ${new Date().toISOString()} — \`${fileLabel}\`（${specSlug}）`,
       '',
       '| 字段 | 值 |',
       '|------|-----|',
+      `| 任务标题 | ${this.escapeMdCell(opts.taskTitle ?? '—')} |`,
       `| 任务描述 | ${this.escapeMdCell(opts.userInput)} |`,
       `| pageUrl | ${this.escapeMdCell(opts.pageUrl)} |`,
-      `| 代码文件 | [\`${id}.ts\`](./${id}.ts) |`,
+      `| 代码文件 | [\`${fileLabel}\`](./${encodeURI(fileLabel)}) |`,
       `| 结果 | passed **${opts.passed}** / failed **${opts.failed}**${opts.skipped ? '（stub 跳过）' : ''} |`,
       '',
     ].join('\n')
     const next = prev.trim() ? `${prev.trim()}\n\n---\n\n${fragment}` : `${title}${fragment}`
     await agentFileWriteText(fullManifest, next)
-    return { tsRelative: tsRel, manifestRelative: manifestRel }
+    return { tsRelative: tsRel, manifestRelative: manifestRel, specSlug }
   }
 }
 

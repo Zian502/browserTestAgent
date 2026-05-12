@@ -77,12 +77,26 @@ const iconBtn: CSSProperties = {
   color: '#111827',
 }
 
-function CodeFileIcon() {
+/** 编辑器窗口 + `</>` + 行号槽与代码行，比单页文档更贴近「源码编辑」 */
+function CodeEditorTitleIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <path d="M10 13h4M10 17h2" />
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.65"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="3.25" y="3.75" width="17.5" height="16.5" rx="2.25" />
+      <path d="M6.25 8.25v7.5" strokeWidth="1.25" opacity={0.45} />
+      <path d="M9.25 9.25L7 12l2.25 2.75" />
+      <path d="M12.75 8.75l-1.25 6.5" />
+      <path d="M14.75 9.25L17 12l-2.25 2.75" />
+      <path d="M8.25 15.75h5.5M8.25 18h3.5" strokeWidth="1.35" opacity={0.85} />
     </svg>
   )
 }
@@ -91,6 +105,14 @@ function PlayIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
       <path d="M8 5v14l11-7z" />
+    </svg>
+  )
+}
+
+function CloseIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+      <path d="M18 6L6 18M6 6l12 12" />
     </svg>
   )
 }
@@ -228,6 +250,8 @@ export function RunTestCodeModal(props: {
   }, [open, onClose])
 
   if (!open || !params) return null
+  /** 内联 async 闭包无法继承对 `params` 的收窄，用局部常量固定本次渲染的非空快照 */
+  const modalParams = params
 
   async function handleRun() {
     setRunning(true)
@@ -237,10 +261,10 @@ export function RunTestCodeModal(props: {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sessionId: params.sessionId,
+          sessionId: modalParams.sessionId,
           code,
-          targetUrl: params.targetUrl,
-          timeoutMs: params.timeoutMs,
+          targetUrl: modalParams.targetUrl,
+          timeoutMs: modalParams.timeoutMs,
         }),
       })
       const body = (await res.json()) as Record<string, unknown>
@@ -285,8 +309,8 @@ export function RunTestCodeModal(props: {
       <div style={panel} role="dialog" aria-modal aria-labelledby="run-test-code-title">
         <div style={toolbar}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-            <span style={{ color: '#6b7280', display: 'flex' }}>
-              <CodeFileIcon />
+            <span style={{ color: '#4b5563', display: 'flex' }}>
+              <CodeEditorTitleIcon />
             </span>
             <span id="run-test-code-title" style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>
               测试代码
@@ -309,12 +333,8 @@ export function RunTestCodeModal(props: {
             >
               <PlayIcon />
             </button>
-            <button
-              type="button"
-              style={{ ...iconBtn, width: 'auto', padding: '0 12px', fontSize: 12, fontWeight: 500 }}
-              onClick={onClose}
-            >
-              关闭
+            <button type="button" style={iconBtn} title="关闭" aria-label="关闭" onClick={onClose}>
+              <CloseIcon />
             </button>
           </div>
         </div>

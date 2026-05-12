@@ -1,0 +1,13 @@
+---
+description: Monorepo layout, ports, docs, and safety for Browser Test Agent
+alwaysApply: true
+---
+
+# Browser Test Agent — 核心上下文
+
+- **结构**：pnpm workspace。`packages/server` = NestJS + LangGraph + Playwright；`packages/extension` = React + Vite Chrome MV3。
+- **常用命令**（在仓库根）：`pnpm run dev:server`、`pnpm run dev:extension`、`pnpm run build`。
+- **API 默认**：`http://localhost:3850`；扩展侧可用 `VITE_AGENT_API` 覆盖（见 `packages/extension/src/panel/agent-api-base.ts`）。
+- **勿提交**：`.env*`、`.agent-cache/`、`.pnpm-store/`、密钥；`.gitignore` 已覆盖部分路径。
+- **编排入口**：`packages/server/src/agents/graph.ts`；状态 `state.ts`；SSE 控制器 `gateway/agent.controller.ts`。
+- **文档**：`README.md` / `README.zh-CN.md`；Memories 种子：`MEMORIES.template.md`。

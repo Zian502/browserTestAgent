@@ -22,3 +22,12 @@ export async function agentFileWriteText(filePath: string, content: string): Pro
 export async function agentFileUnlinkQuiet(filePath: string): Promise<void> {
   await fs.unlink(normalizeAbsolute(filePath)).catch(() => {})
 }
+
+export async function agentFileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(normalizeAbsolute(filePath))
+    return true
+  } catch {
+    return false
+  }
+}

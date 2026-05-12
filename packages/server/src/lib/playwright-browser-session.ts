@@ -55,6 +55,26 @@ async function launchChromeLikeBrowser(opts: PlaywrightSessionLaunchOptions): Pr
 }
 
 /**
+ * 在 `sessions` 中登记空白页会话（不导航 URL），与主流程 CDP 会话同源管理；
+ * 供 `run_test` 在省略 `sessionId` 时用临时 id 创建页签，并由 `disposePlaywrightSession` 释放。
+ */
+export async function createHeldSessionBlankPage(
+  sessionId: string,
+  opts: PlaywrightSessionLaunchOptions = {},
+): Promise<Page> {
+  if (sessions.has(sessionId)) {
+    await disposePlaywrightSession(sessionId)
+  }
+  const browser = await launchChromeLikeBrowser(opts)
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+  const page = await context.newPage()
+  const navTimeout = opts.navigationTimeoutMs ?? 90_000
+  page.setDefaultNavigationTimeout(navTimeout)
+  sessions.set(sessionId, { browser, context, page })
+  return page
+}
+
+/**
  * 启动 Chromium/Chrome，导航到 pageUrl，通过 CDP 抓取 HTML，并**保持浏览器与会话**供后续
  * parseHtmlAgent / testCodeAgent 复用同一标签页。
  */

@@ -32,7 +32,8 @@ export class AgentController {
   private graph = buildGraph()
 
   /**
-   * 扩展侧「重新执行」run-test-code：在既有 Playwright CDP 会话上调用 `playwright` 工具的 `run_test`。
+   * 扩展侧「重新执行」run-test-code：调用 `playwright` 的 `run_test`。
+   * 有 `sessionId` 时复用 CDP 会话页；省略或空串时由服务端起临时浏览器（可选先打开 `targetUrl`）。
    */
   @Post('agent/run-test-code')
   async runTestCode(
@@ -47,7 +48,6 @@ export class AgentController {
     const sessionId = String(body.sessionId ?? '').trim()
     const code = String(body.code ?? '')
     const targetUrl = String(body.targetUrl ?? '')
-    if (!sessionId) throw new BadRequestException('缺少 sessionId（需与当前 Playwright 会话一致）')
     if (!code.trim()) throw new BadRequestException('缺少 code')
     const out = await executeCoreTool(PLAYWRIGHT_TOOL, {
       op: 'run_test',

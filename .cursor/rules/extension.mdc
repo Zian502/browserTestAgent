@@ -1,0 +1,13 @@
+---
+description: Chrome extension panel — React, Vite, assistant-ui patterns
+globs: packages/extension/**/*.tsx, packages/extension/**/*.ts
+alwaysApply: false
+---
+
+# Extension (`@browser-test-agent/extension`)
+
+- **构建**：Vite；`pnpm run dev:extension`（watch）或 `dev:web`（面板 Web 调试）。
+- **产物**：加载 `dist/` 到 Chrome「加载已解压的扩展程序」。
+- **API 基址**：`AGENT_API_BASE` 来自 `src/panel/agent-api-base.ts`（`import.meta.env.VITE_AGENT_API`，默认 `http://localhost:3850`）。
+- **清单**：`manifest.json` 含对 `localhost:3850` 的 `host_permissions`；若改端口需同步。
+- **UI**：`src/panel/`（运行时、线程、工具卡片、RunTestCodeModal 等）；与后端 SSE / JSON API 契约变更时需双边对齐。
