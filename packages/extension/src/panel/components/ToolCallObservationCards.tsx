@@ -336,22 +336,18 @@ function StatusIcon(props: { status: MergedCardStatus }) {
   )
 }
 
-/** 与侧栏密度一致：窗口 + 播放，表示「打开并执行测试代码」 */
-function RunTestCodeGlyph(props: { size?: number }) {
+/** 代码图标：`</>`，表示「打开代码编辑器」 */
+function CodeEditorGlyph(props: { size?: number }) {
   const s = props.size ?? 14
   return (
     <svg width={s} height={s} viewBox="0 0 24 24" fill="none" aria-hidden>
-      <rect
-        x="4.25"
-        y="4.75"
-        width="15.5"
-        height="14.5"
-        rx="2.25"
+      <path
+        d="M8.5 9 5 12l3.5 3M15.5 9 19 12l-3.5 3"
         stroke="currentColor"
         strokeWidth="1.75"
+        strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <path d="M10.5 10v4l3.5-2-3.5-2z" fill="currentColor" />
     </svg>
   )
 }
@@ -452,7 +448,7 @@ function InvocationCard(props: { card: MergedInvocationCard }) {
               openRunTestCodeModal()
             }}
           >
-            <RunTestCodeGlyph size={14} />
+            <CodeEditorGlyph size={14} />
           </button>
         ) : null}
       </div>

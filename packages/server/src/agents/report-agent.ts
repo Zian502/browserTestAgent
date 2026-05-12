@@ -66,9 +66,15 @@ async function llmOutlineForType(
 
 /** 按已完成子任务类型调用 LLM 生成报告纲要 JSON，再经 `report` skill 落盘并推送事件。 */
 export async function reportAgentNode(state: State) {
-  const tasksToReport = REPORT_KEYS.filter(
-    (t) => state.agentOutputs[t.key]?.status === 'done' || state.agentOutputs[t.key]?.status === 'cached',
-  )
+  const runningReport = state.taskPlan.find((t) => t.assignTo === 'reportAgent' && t.status === 'running')
+  const scope = runningReport?.reportTypes
+
+  const tasksToReport = REPORT_KEYS.filter((t) => {
+    const ok = state.agentOutputs[t.key]?.status === 'done' || state.agentOutputs[t.key]?.status === 'cached'
+    if (!ok) return false
+    if (scope?.length) return scope.includes(t.type)
+    return true
+  })
 
   const streamEvents: StreamEvent[] = []
   const llmSpecs: Partial<Record<ReportType, ReportLlmOutline>> = {}
@@ -99,7 +105,7 @@ export async function reportAgentNode(state: State) {
   const reportOut = await runSkill(
     'report',
     { state, agentName: 'reportAgent', taskId, emit },
-    { llmSpecs, taskId },
+    { llmSpecs, taskId, onlyTypes: scope },
   )
 
   const reports = (reportOut['reports'] as Record<string, string>) ?? {}

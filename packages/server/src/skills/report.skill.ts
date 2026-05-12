@@ -19,6 +19,10 @@ export const reportSkill: SkillDefinition = {
     const { reports, streamEvents: reportEvents, outcomes } = await executeReportBatchForTool(ctx.state, {
       llmSpecs,
       writeText: (rel, html) => invokeWriteTool(ctx.agentName, ctx.emit, rel, html),
+      onlyTypes:
+        Array.isArray(input['onlyTypes']) && (input['onlyTypes'] as unknown[]).length > 0
+          ? (input['onlyTypes'] as ReportType[]).filter((x) => x === 'test' || x === 'seo' || x === 'pagespeed')
+          : undefined,
     })
     for (const ev of reportEvents) {
       ctx.emit(ev)

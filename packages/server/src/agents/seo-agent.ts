@@ -4,6 +4,7 @@ import { extractJsonObject, extractMessageText } from './llm-text'
 import { findTaskId, updateStatus } from './graph-helpers'
 import { buildSeoUserMessage } from './prompts/seo-agent.prompt'
 import { agentObservation } from './agent-observation'
+import { fileCacheService } from '../lib/file-cache'
 import { runToolWithStreamEvents } from './tool-stream'
 
 const SEO_LLM_ANALYSIS_TOOL = 'seo_llm_analysis' as const
@@ -19,6 +20,7 @@ export async function seoAgentNode(state: State) {
   }
 
   const toolStream: StreamEvent[] = []
+  const pageHtmlSnippet = ((await fileCacheService.readHtmlSnapshotByPageUrl(state.pageUrl)) ?? '').slice(0, 3000)
   if (hasChatLlm()) {
     const { streamEvents: ev, result } = await runToolWithStreamEvents(
       'seoAgent',
@@ -27,7 +29,7 @@ export async function seoAgentNode(state: State) {
       async () => {
         const model = createChatLlm({ temperature: 0 })
         const response = await model.invoke(
-          buildSeoUserMessage(state.pageUrl, dsl, state.pageHtml.slice(0, 3000)),
+          buildSeoUserMessage(state.pageUrl, dsl, pageHtmlSnippet),
         )
         try {
           return extractJsonObject<Record<string, unknown>>(extractMessageText(response.content))

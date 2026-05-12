@@ -18,33 +18,6 @@ export async function testCodeAgentNode(state: State) {
   const task = taskId ? state.taskPlan.find((t: TaskPlan) => t.id === taskId) : undefined
   const cacheKey = task?.cacheKey
 
-  if (cacheKey) {
-    const cached = await fileCacheService.get<{ code: string; testResult: unknown }>(cacheKey)
-    if (cached) {
-      return {
-        agentOutputs: { testCodeAgent: { status: 'cached', data: cached, fromCache: true } },
-        taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'done') : state.taskPlan,
-        streamEvents: [
-          agentObservation('testCodeAgent', 'skipped', {
-            taskId,
-            summary: '测试代码与结果来自缓存',
-            data: {
-              fromCache: true,
-              codeLength: typeof cached.code === 'string' ? cached.code.length : 0,
-              testResult: cached.testResult,
-            },
-          }),
-          {
-            type: 'agent_done' as const,
-            agentName: 'testCodeAgent' as const,
-            payload: { cached: true },
-            timestamp: Date.now(),
-          },
-        ],
-      }
-    }
-  }
-
   const dsl = state.pageDSL
   if (!dsl) throw new Error('pageDSL 未就绪')
 
@@ -114,9 +87,6 @@ export async function testCodeAgentNode(state: State) {
   }
 
   const persistKey = cacheKey ?? `${state.pageUrl}::${state.userInput}::testCode`
-  if ((testResult.passed > 0 || testResult.failed === 0) && cacheKey) {
-    await fileCacheService.set(cacheKey, { code, testResult }, { ttl: 86_400 })
-  }
   await fileCacheService.persistTestCodeArtifacts({
     cacheKey: persistKey,
     userInput: state.userInput,

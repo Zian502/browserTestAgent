@@ -1,6 +1,7 @@
 import { Command } from '@langchain/langgraph'
 import type { State, StreamEvent } from './state'
 import { MISSING_PAGE_CONTEXT_MESSAGE } from './prompts/main-agent.prompt'
+import { fileCacheService } from '../lib/file-cache'
 import { runSkill } from '../skills'
 
 function isBlank(s: string | undefined): boolean {
@@ -41,7 +42,8 @@ export async function mainAgentNode(state: State) {
     })
   }
 
-  if (state.runnerSessionId.trim() && state.pageHtml.trim()) {
+  const snapshotHtml = await fileCacheService.readHtmlSnapshotByPageUrl(state.pageUrl.trim())
+  if (state.runnerSessionId.trim() && snapshotHtml?.trim()) {
     return new Command({
       update: {
         streamEvents: [
@@ -82,7 +84,6 @@ export async function mainAgentNode(state: State) {
     return new Command({
       update: {
         streamEvents,
-        pageHtml: cap['pageHtml'] as string,
         runnerSessionId: cap['sessionId'] as string,
         usePlaywrightBrowser: true,
       },

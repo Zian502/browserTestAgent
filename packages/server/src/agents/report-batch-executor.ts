@@ -41,6 +41,8 @@ export async function executeReportBatchForTool(
   options?: {
     llmSpecs?: Partial<Record<ReportType, ReportLlmOutline>>
     writeText?: (relativePath: string, content: string) => Promise<void>
+    /** 若设置，仅对已完成的对应子 agent 输出生成这些类型的报告 */
+    onlyTypes?: ReportType[]
   },
 ): Promise<{
   reports: Record<string, string>
@@ -56,9 +58,12 @@ export async function executeReportBatchForTool(
       await fileCacheService.writeFile(relativePath, content)
     })
 
-  const eligible = REPORT_TASKS.filter(
-    (t) => state.agentOutputs[t.key]?.status === 'done' || state.agentOutputs[t.key]?.status === 'cached',
-  )
+  const eligible = REPORT_TASKS.filter((t) => {
+    const ok = state.agentOutputs[t.key]?.status === 'done' || state.agentOutputs[t.key]?.status === 'cached'
+    if (!ok) return false
+    if (options?.onlyTypes?.length) return options.onlyTypes.includes(t.type)
+    return true
+  })
 
   const outcomes = await Promise.all(
     eligible.map(({ key, type }) => generateOneReportFile(state, type, key, llmSpecs, writeText)),

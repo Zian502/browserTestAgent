@@ -10,7 +10,7 @@ export const compressHtmlSkill: SkillDefinition = {
   description: '移除脚本、样式与注释并裁剪属性，控制最大长度，供解析 Agent 使用。',
   toolsRequired: [],
   async run(ctx, input) {
-    const pageHtml = String(input['html'] ?? ctx.state.pageHtml ?? '')
+    const pageHtml = String(input['html'] ?? '')
     const options = (input['compressOptions'] ?? {}) as CompressOptions
     const compressedHtml = await htmlCompressor.compress(pageHtml, {
       removeScripts: true,

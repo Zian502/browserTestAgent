@@ -1,5 +1,6 @@
 import { Annotation, messagesStateReducer } from '@langchain/langgraph'
 import type { BaseMessage } from '@langchain/core/messages'
+import type { ReportType } from '../lib/report-generator'
 
 export interface TaskPlan {
   id: string
@@ -10,6 +11,11 @@ export interface TaskPlan {
   canParallel: boolean
   status: 'pending' | 'running' | 'done' | 'failed' | 'skipped'
   cacheKey?: string
+  /**
+   * 仅当 assignTo 为 reportAgent 时使用：本段流水线只生成这些类型的 HTML 报告
+   *（避免串行多段流水线时重复生成其它阶段已产出的报告）。
+   */
+  reportTypes?: ReportType[]
 }
 
 export type AgentName =
@@ -81,11 +87,9 @@ export const BrowserTestState = Annotation.Root({
   }),
   userInput: Annotation<string>(),
   pageUrl: Annotation<string>(),
-  /** 服务端经 Playwright+CDP 得到的 HTML（与 pageUrl 对应） */
-  pageHtml: Annotation<string>(),
   /** Playwright 托管会话 id（与 CDP 打开的页签对应）；空表示未启用 */
   runnerSessionId: Annotation<string>(),
-  /** true：pageHtml 来自 Playwright，测试应在同一会话页签执行 */
+  /** true：启用 Playwright；HTML 快照见 `.agent-cache/html`，解析/分析前按需 CDP 刷新并回写该文件 */
   usePlaywrightBrowser: Annotation<boolean>(),
   /** mainAgent 调 Playwright 工具时使用 */
   playwrightHeadless: Annotation<boolean>(),

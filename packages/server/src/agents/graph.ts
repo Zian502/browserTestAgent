@@ -7,15 +7,14 @@ import { testCodeAgentNode } from './test-code-agent'
 import { seoAgentNode } from './seo-agent'
 import { pagespeedAgentNode } from './pagespeed-agent'
 import { reportAgentNode } from './report-agent'
-import {
-  allTasksFinished,
-  executablePendingTasks,
-  markRunning,
-  markRunningBatch,
-  updateStatus,
-} from './graph-helpers'
+import { markRunning, allTasksFinished, executablePendingTasks, findTaskId, updateStatus } from './graph-helpers'
 import { agentObservation } from './agent-observation'
 import { disposePlaywrightSession } from '../lib/playwright-browser-session'
+
+function pickNextExecutableTask(plan: State['taskPlan'], exec: State['taskPlan']): State['taskPlan'][number] {
+  const order = new Map(plan.map((t, i) => [t.id, i]))
+  return [...exec].sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))[0]
+}
 
 async function dispatcherNode(state: State) {
   if (state.taskPlan.length === 0) {
@@ -31,141 +30,71 @@ async function dispatcherNode(state: State) {
     return new Command({ goto: 'finalSummary' })
   }
 
-  const parseTask = exec.find((t) => t.assignTo === 'parseHtmlAgent')
-  if (parseTask && !state.pageDSL) {
-    return new Command({
-      update: {
-        taskPlan: markRunning(state.taskPlan, parseTask.id),
-        streamEvents: [
-          {
-            type: 'agent_start',
-            agentName: 'parseHtmlAgent',
-            taskId: parseTask.id,
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      goto: 'parseHtmlAgent',
-    })
+  const next = pickNextExecutableTask(state.taskPlan, exec)
+  const assign = next.assignTo
+
+  const goto =
+    assign === 'parseHtmlAgent'
+      ? 'parseHtmlAgent'
+      : assign === 'testCodeAgent'
+        ? 'testCodeAgent'
+        : assign === 'seoAgent'
+          ? 'seoAgent'
+          : assign === 'pagespeedAgent'
+            ? 'pagespeedAgent'
+            : assign === 'reportAgent'
+              ? 'reportAgent'
+              : 'finalSummary'
+
+  if (goto === 'finalSummary') {
+    return new Command({ goto: 'finalSummary' })
   }
 
-  const reportTask = exec.find((t) => t.assignTo === 'reportAgent')
-  const parallelCandidates = exec.filter((t) =>
-    ['testCodeAgent', 'seoAgent', 'pagespeedAgent'].includes(t.assignTo),
-  )
-
-  const needsDsl = (t: (typeof parallelCandidates)[number]) =>
-    t.assignTo === 'testCodeAgent' || t.assignTo === 'seoAgent'
-
-  const runnableParallel = parallelCandidates.filter((t) => !needsDsl(t) || state.pageDSL != null)
-
-  if (runnableParallel.length > 0) {
-    return new Command({
-      update: {
-        taskPlan: markRunningBatch(
-          state.taskPlan,
-          runnableParallel.map((t) => t.id),
-        ),
-        streamEvents: runnableParallel.map((t) => ({
+  return new Command({
+    update: {
+      taskPlan: markRunning(state.taskPlan, next.id),
+      streamEvents: [
+        {
           type: 'agent_start' as const,
-          agentName: t.assignTo,
-          taskId: t.id,
+          agentName: assign,
+          taskId: next.id,
           timestamp: Date.now(),
-        })),
-      },
-      goto: 'parallelBatch',
-    })
-  }
-
-  if (reportTask) {
-    return new Command({
-      update: {
-        taskPlan: markRunning(state.taskPlan, reportTask.id),
-        streamEvents: [
-          {
-            type: 'agent_start',
-            agentName: 'reportAgent',
-            taskId: reportTask.id,
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      goto: 'reportAgent',
-    })
-  }
-
-  return new Command({ goto: 'finalSummary' })
-}
-
-function mergeParallelTaskPlans(
-  base: State['taskPlan'],
-  runningIds: string[],
-  parts: { taskPlan?: State['taskPlan'] }[],
-): State['taskPlan'] {
-  const idSet = new Set(runningIds)
-  let cur = [...base]
-  for (const id of idSet) {
-    const overlay = parts
-      .map((p) => p.taskPlan?.find((t) => t.id === id))
-      .find((t) => t && t.status !== 'running')
-    if (overlay) {
-      cur = cur.map((t) => (t.id === id ? overlay : t))
-    }
-  }
-  return cur
-}
-
-async function parallelBatchNode(state: State) {
-  const running = state.taskPlan.filter(
-    (t) =>
-      t.status === 'running' &&
-      (t.assignTo === 'testCodeAgent' || t.assignTo === 'seoAgent' || t.assignTo === 'pagespeedAgent'),
-  )
-
-  const runners = running.map(async (t) => {
-    try {
-      if (t.assignTo === 'testCodeAgent') return await testCodeAgentNode(state)
-      if (t.assignTo === 'seoAgent') return await seoAgentNode(state)
-      return await pagespeedAgentNode(state)
-    } catch (e) {
-      const err = String(e)
-      return {
-        agentOutputs: { [t.assignTo]: { status: 'failed' as const, error: err } },
-        taskPlan: updateStatus(state.taskPlan, t.id, 'failed'),
-        streamEvents: [
-          agentObservation(t.assignTo, 'failed', {
-            taskId: t.id,
-            summary: err,
-            data: { message: err },
-          }),
-          {
-            type: 'agent_failed' as const,
-            agentName: t.assignTo,
-            taskId: t.id,
-            payload: { message: err },
-            timestamp: Date.now(),
-          },
-        ],
-      }
-    }
+        },
+      ],
+    },
+    goto,
   })
+}
 
-  const parts = await Promise.all(runners)
-
-  const agentOutputs = Object.assign({}, ...parts.map((p) => p.agentOutputs ?? {}))
-  const streamEvents: StreamEvent[] = []
-  for (const p of parts) {
-    for (const e of p.streamEvents ?? []) {
-      streamEvents.push(e as StreamEvent)
-    }
+async function singleAgentNode(
+  state: State,
+  assignTo: 'testCodeAgent' | 'seoAgent' | 'pagespeedAgent',
+  run: (s: State) => Promise<Record<string, unknown>>,
+): Promise<Partial<State>> {
+  try {
+    return (await run(state)) as Partial<State>
+  } catch (e) {
+    const err = String(e)
+    const taskId = findTaskId(state.taskPlan, assignTo)
+    return {
+      agentOutputs: { [assignTo]: { status: 'failed' as const, error: err } },
+      taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'failed') : state.taskPlan,
+      streamEvents: [
+        agentObservation(assignTo, 'failed', {
+          taskId,
+          summary: err,
+          data: { message: err },
+        }),
+        {
+          type: 'agent_failed' as const,
+          agentName: assignTo,
+          taskId,
+          payload: { message: err },
+          timestamp: Date.now(),
+        },
+      ],
+    } as Partial<State>
   }
-  const taskPlan = mergeParallelTaskPlans(
-    state.taskPlan,
-    running.map((t) => t.id),
-    parts,
-  )
-
-  return { agentOutputs, taskPlan, streamEvents }
 }
 
 async function finalSummaryNode(state: State) {
@@ -192,17 +121,34 @@ export function buildGraph() {
     .addNode('mainAgent', mainAgentNode, { ends: ['planAgent', 'finalSummary', 'mainAgent'] })
     .addNode('planAgent', planAgentNode)
     .addNode('dispatcher', dispatcherNode, {
-      ends: ['planAgent', 'parseHtmlAgent', 'parallelBatch', 'reportAgent', 'finalSummary', END],
+      ends: [
+        'planAgent',
+        'parseHtmlAgent',
+        'testCodeAgent',
+        'seoAgent',
+        'pagespeedAgent',
+        'reportAgent',
+        'finalSummary',
+        END,
+      ],
     })
     .addNode('parseHtmlAgent', parseHtmlAgentNode, { ends: ['dispatcher'] })
-    .addNode('parallelBatch', parallelBatchNode)
+    .addNode('testCodeAgent', (s: State) => singleAgentNode(s, 'testCodeAgent', testCodeAgentNode), {
+      ends: ['dispatcher'],
+    })
+    .addNode('seoAgent', (s: State) => singleAgentNode(s, 'seoAgent', seoAgentNode), { ends: ['dispatcher'] })
+    .addNode('pagespeedAgent', (s: State) => singleAgentNode(s, 'pagespeedAgent', pagespeedAgentNode), {
+      ends: ['dispatcher'],
+    })
     .addNode('reportAgent', reportAgentNode, { ends: ['dispatcher'] })
     .addNode('finalSummary', finalSummaryNode)
 
     .addEdge(START, 'mainAgent')
     .addEdge('planAgent', 'dispatcher')
     .addEdge('parseHtmlAgent', 'dispatcher')
-    .addEdge('parallelBatch', 'dispatcher')
+    .addEdge('testCodeAgent', 'dispatcher')
+    .addEdge('seoAgent', 'dispatcher')
+    .addEdge('pagespeedAgent', 'dispatcher')
     .addEdge('reportAgent', 'dispatcher')
     .addEdge('finalSummary', END)
 

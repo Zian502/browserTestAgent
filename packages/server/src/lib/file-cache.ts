@@ -1,18 +1,6 @@
 import * as path from 'path'
 import * as crypto from 'crypto'
-import {
-  agentFileMkdirp,
-  agentFileReadText,
-  agentFileUnlinkQuiet,
-  agentFileWriteText,
-  agentFileExists,
-} from './agent-files'
-
-interface CacheEntry<T> {
-  data: T
-  expiresAt: number
-  metadata?: Record<string, unknown>
-}
+import { agentFileMkdirp, agentFileReadText, agentFileWriteText, agentFileExists } from './agent-files'
 
 class FileCacheService {
   private cacheDir = path.join(process.cwd(), '.agent-cache')
@@ -20,7 +8,6 @@ class FileCacheService {
   async init() {
     await agentFileMkdirp(this.cacheDir)
     await agentFileMkdirp(path.join(this.cacheDir, 'reports'))
-    await agentFileMkdirp(path.join(this.cacheDir, 'dsl'))
     await agentFileMkdirp(path.join(this.cacheDir, 'html'))
     await agentFileMkdirp(path.join(this.cacheDir, 'testCode'))
   }
@@ -53,6 +40,19 @@ class FileCacheService {
     await agentFileMkdirp(path.join(this.cacheDir, 'html'))
     const rel = path.join('html', this.htmlFilenameFromPageUrl(u))
     return this.writeFile(rel, html)
+  }
+
+  /** 读取 `.agent-cache/html` 下与 pageUrl 对应的最新快照（无文件或为空则返回 null） */
+  async readHtmlSnapshotByPageUrl(pageUrl: string): Promise<string | null> {
+    const u = pageUrl.trim()
+    if (!u) return null
+    const fullPath = path.join(this.cacheDir, 'html', this.htmlFilenameFromPageUrl(u))
+    try {
+      const raw = await agentFileReadText(fullPath)
+      return raw.trim() ? raw : null
+    } catch {
+      return null
+    }
   }
 
   artifactIdFromKey(key: string): string {
@@ -97,55 +97,8 @@ class FileCacheService {
     return path.join('testCode', `${slug}-${suffix}.spec.ts`)
   }
 
-  private getFilePath(key: string) {
-    const safeKey = crypto.createHash('md5').update(key).digest('hex')
-    return path.join(this.cacheDir, `${safeKey}.json`)
-  }
-
-  jsonCacheRelativePath(key: string): string {
-    const safeKey = crypto.createHash('md5').update(key).digest('hex')
-    return `${safeKey}.json`
-  }
-
   private async ensureDir() {
     await agentFileMkdirp(this.cacheDir)
-  }
-
-  async get<T>(key: string): Promise<T | null> {
-    try {
-      await this.ensureDir()
-      const filePath = this.getFilePath(key)
-      const raw = await agentFileReadText(filePath)
-      const entry = JSON.parse(raw) as CacheEntry<T>
-
-      if (Date.now() > entry.expiresAt) {
-        await agentFileUnlinkQuiet(filePath)
-        return null
-      }
-
-      return entry.data
-    } catch {
-      return null
-    }
-  }
-
-  buildKvCacheWrite<T>(
-    key: string,
-    data: T,
-    options: { ttl?: number; metadata?: Record<string, unknown> } = {},
-  ): { relativePath: string; body: string } {
-    const entry: CacheEntry<T> = {
-      data,
-      expiresAt: Date.now() + (options.ttl ?? 3600) * 1000,
-      metadata: options.metadata,
-    }
-    return { relativePath: this.jsonCacheRelativePath(key), body: JSON.stringify(entry, null, 2) }
-  }
-
-  async set<T>(key: string, data: T, options: { ttl?: number; metadata?: Record<string, unknown> } = {}) {
-    await this.ensureDir()
-    const { relativePath, body } = this.buildKvCacheWrite(key, data, options)
-    await agentFileWriteText(path.join(this.cacheDir, relativePath), body)
   }
 
   async writeFile(relativePath: string, content: string): Promise<string> {
@@ -153,18 +106,6 @@ class FileCacheService {
     const fullPath = path.join(this.cacheDir, relativePath)
     await agentFileWriteText(fullPath, content)
     return fullPath
-  }
-
-  async writeDslSnapshot(cacheKey: string, body: { pageUrl: string; dsl: unknown }): Promise<string> {
-    const id = this.artifactIdFromKey(cacheKey)
-    const rel = path.join('dsl', `${id}.json`)
-    const payload = {
-      cacheKey,
-      pageUrl: body.pageUrl,
-      savedAt: new Date().toISOString(),
-      dsl: body.dsl,
-    }
-    return this.writeFile(rel, JSON.stringify(payload, null, 2))
   }
 
   private escapeMdCell(s: string): string {
