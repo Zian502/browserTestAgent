@@ -4,12 +4,12 @@ import {
   useLocalRuntime,
   type ChatModelAdapter,
   type ChatModelRunResult,
-  type ThreadMessage,
 } from '@assistant-ui/react'
 import { useTaskStore } from './stores/task-store'
 import { getPageContextForAgent, isAcceptablePageUrl, isExtensionRuntime } from '../lib/page-context'
 import { resolveLatestUserInput } from '../lib/user-intent-url'
 import { AGENT_API_BASE } from './agent-api-base'
+import { ChatHistoryHydration } from './chat-history-hydration'
 
 function agentLabel(name?: string) {
   const map: Record<string, string> = {
@@ -317,6 +317,7 @@ export function AgentRuntimeProvider({ children }: { children: ReactNode }) {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      <ChatHistoryHydration />
       {children}
     </AssistantRuntimeProvider>
   )

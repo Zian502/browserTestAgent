@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
 import type { Model } from 'mongoose'
 import { ChatMessage } from './chat-message.schema'
+import { ChatSseEvent } from './chat-sse-event.schema'
 import { ChatSession } from './chat-session.schema'
 
 function clipTitle(s: string, max = 120): string {
@@ -16,6 +17,7 @@ export class ChatPersistenceService {
   constructor(
     @InjectModel(ChatSession.name) private readonly sessions: Model<ChatSession>,
     @InjectModel(ChatMessage.name) private readonly messages: Model<ChatMessage>,
+    @InjectModel(ChatSseEvent.name) private readonly sseEvents: Model<ChatSseEvent>,
   ) {}
 
   async recordUserTurn(params: {
@@ -46,6 +48,26 @@ export class ChatPersistenceService {
       })
     } catch (e) {
       this.log.warn(`recordUserTurn failed: ${String(e)}`)
+    }
+  }
+
+  /** 每条推送给客户端的 SSE JSON（`data: ...` 行内容）写一条，与发送顺序一致依赖 `createdAt`。 */
+  async appendSseEvent(params: {
+    sessionId: string
+    threadId: string
+    data: Record<string, unknown>
+  }): Promise<void> {
+    try {
+      const ev = params.data['event']
+      const eventType = typeof ev === 'string' ? ev : ''
+      await this.sseEvents.create({
+        sessionId: params.sessionId,
+        threadId: params.threadId,
+        eventType,
+        payload: params.data,
+      })
+    } catch (e) {
+      this.log.warn(`appendSseEvent failed: ${String(e)}`)
     }
   }
 

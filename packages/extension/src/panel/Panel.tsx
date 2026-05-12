@@ -13,6 +13,7 @@ export function Panel() {
         flexDirection: 'column',
         fontFamily: 'system-ui, sans-serif',
         paddingBottom: 20,
+        float: 'right',
       }}
     >
       <AgentRuntimeProvider>

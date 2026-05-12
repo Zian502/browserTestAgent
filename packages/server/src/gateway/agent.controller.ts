@@ -89,7 +89,23 @@ export class AgentController {
     return { sessions }
   }
 
-  /** 某会话下的历史消息（MongoDB `chat_messages`）。 */
+  /**
+   * 历史对话消息列表（MongoDB `chat_messages`）。
+   * `sessionId` 省略时使用服务端默认会话；`limit` 默认 300、最大 500。
+   */
+  @Get('agent/chat/messages')
+  async listChatMessagesQuery(
+    @Query('sessionId') sessionId?: string,
+    @Query('limit') limitRaw?: string,
+  ) {
+    const sid = String(sessionId ?? '').trim() || DEFAULT_CHAT_SESSION_ID
+    const lim = parseInt(String(limitRaw ?? '300'), 10)
+    const limit = Number.isFinite(lim) ? Math.min(500, Math.max(1, lim)) : 300
+    const messages = await this.chatPersistence.listMessages(sid, limit)
+    return { sessionId: sid, messages }
+  }
+
+  /** 某会话下的历史消息（MongoDB `chat_messages`），路径参数版。 */
   @Get('agent/chat/sessions/:sessionId/messages')
   async listChatMessages(@Param('sessionId') sessionId: string) {
     const sid = String(sessionId ?? '').trim()
@@ -116,12 +132,20 @@ export class AgentController {
     res.setHeader('Connection', 'keep-alive')
     ;(res as Response & { flushHeaders?: () => void }).flushHeaders?.()
 
+    const threadId = `thread_${Date.now()}`
+    const chatSessionId = DEFAULT_CHAT_SESSION_ID
+
     const send = (obj: Record<string, unknown>) => {
+      void this.chatPersistence
+        .appendSseEvent({
+          sessionId: chatSessionId,
+          threadId,
+          data: obj,
+        })
+        .catch(() => {})
       res.write(`data: ${JSON.stringify(obj)}\n\n`)
     }
 
-    const threadId = `thread_${Date.now()}`
-    const chatSessionId = DEFAULT_CHAT_SESSION_ID
     let assistantTextBuf = ''
     try {
       const pageUrl = (body.pageUrl ?? '').trim()

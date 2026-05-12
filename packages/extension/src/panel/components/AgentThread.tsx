@@ -1,4 +1,4 @@
-import { useState, type ComponentProps, type CSSProperties } from 'react'
+import { useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties, type ReactNode } from 'react'
 import {
   ThreadPrimitive,
   MessagePrimitive,
@@ -397,6 +397,38 @@ function assistantTextFromParts(parts: readonly unknown[] | undefined): string {
   return s
 }
 
+/** 新消息或流式追加文本后，将消息列表滚动条置底 */
+function threadScrollBottomKey(s: { thread: { messages: readonly unknown[]; isRunning: boolean } }): string {
+  const msgs = s.thread.messages
+  let key = `${msgs.length}\0${s.thread.isRunning ? 1 : 0}`
+  for (const m of msgs) {
+    const id =
+      m && typeof m === 'object' && 'id' in m && typeof (m as { id: unknown }).id === 'string'
+        ? (m as { id: string }).id
+        : ''
+    const role = m && typeof m === 'object' && 'role' in m ? String((m as { role: unknown }).role) : ''
+    const parts =
+      m && typeof m === 'object' && 'parts' in m ? (m as { parts?: readonly unknown[] }).parts : undefined
+    key += `\0${id}:${role}:${assistantTextFromParts(parts).length}`
+  }
+  return key
+}
+
+function MessagesAreaAutoScroll(props: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const scrollKey = useAuiState(threadScrollBottomKey)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [scrollKey])
+  return (
+    <div ref={ref} style={messagesArea}>
+      {props.children}
+    </div>
+  )
+}
+
 function messageIsLastInThread(message: unknown, msgs: readonly unknown[]): boolean {
   if (msgs.length === 0) return false
   const last = msgs[msgs.length - 1]
@@ -499,12 +531,12 @@ export function AgentThread() {
           </AuiIf>
 
           <AuiIf condition={(s) => !s.thread.isEmpty}>
-            <div style={messagesArea}>
+            <MessagesAreaAutoScroll>
               <ThreadPrimitive.Messages>
                 {({ message }) => <ThreadMessageRow message={message} />}
               </ThreadPrimitive.Messages>
               <PendingAssistantLoader />
-            </div>
+            </MessagesAreaAutoScroll>
           </AuiIf>
         </div>
 
