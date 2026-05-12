@@ -1,11 +1,14 @@
-import { BadRequestException, Body, Controller, Post, Res } from '@nestjs/common'
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, Res } from '@nestjs/common'
 import type { Response } from 'express'
 import { buildGraph } from '../agents/graph'
 import { BrowserTestState } from '../agents/state'
 import { isAcceptablePageUrl } from '../lib/page-url'
 import { disposePlaywrightSession } from '../lib/playwright-browser-session'
 import type { State, StreamEvent } from '../agents/state'
+import { DEFAULT_CHAT_SESSION_ID } from '../chat/constants'
+import { ChatPersistenceService } from '../chat/chat-persistence.service'
 import { executeCoreTool, PLAYWRIGHT_TOOL } from '../tools'
+import { executeReadTool } from '../tools/read'
 
 /**
  * LangGraph `streamMode: 'updates'` 时，单步 chunk 形如 `{ mainAgent: { streamEvents, ... }, planAgent: {...} }`，
@@ -30,6 +33,26 @@ function extractStreamEventsFromGraphStreamChunk(chunk: unknown): StreamEvent[] 
 @Controller('api')
 export class AgentController {
   private graph = buildGraph()
+
+  constructor(private readonly chatPersistence: ChatPersistenceService) {}
+
+  /**
+   * 读取 `.agent-cache` 下已生成的报告 HTML（供扩展新标签页展示）。
+   * 仅允许 `reports/*.html`，防止路径穿越。
+   */
+  @Get('agent/report-html')
+  async getReportHtml(@Query('path') rawPath: string, @Res() res: Response) {
+    const relativePath = String(rawPath ?? '').trim().replace(/^[/\\]+/, '')
+    if (!relativePath.startsWith('reports/')) {
+      throw new BadRequestException('path 必须以 reports/ 开头')
+    }
+    if (!relativePath.endsWith('.html')) {
+      throw new BadRequestException('仅支持 .html 文件')
+    }
+    const { content } = await executeReadTool({ relativePath })
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.send(content)
+  }
 
   /**
    * 扩展侧「重新执行」run-test-code：调用 `playwright` 的 `run_test`。
@@ -59,6 +82,22 @@ export class AgentController {
     return out
   }
 
+  /** 会话列表（MongoDB `chat_sessions`）。 */
+  @Get('agent/chat/sessions')
+  async listChatSessions() {
+    const sessions = await this.chatPersistence.listSessions()
+    return { sessions }
+  }
+
+  /** 某会话下的历史消息（MongoDB `chat_messages`）。 */
+  @Get('agent/chat/sessions/:sessionId/messages')
+  async listChatMessages(@Param('sessionId') sessionId: string) {
+    const sid = String(sessionId ?? '').trim()
+    if (!sid) throw new BadRequestException('缺少 sessionId')
+    const messages = await this.chatPersistence.listMessages(sid)
+    return { sessionId: sid, messages }
+  }
+
   @Post('agent/run')
   async run(
     @Body()
@@ -82,6 +121,8 @@ export class AgentController {
     }
 
     const threadId = `thread_${Date.now()}`
+    const chatSessionId = DEFAULT_CHAT_SESSION_ID
+    let assistantTextBuf = ''
     try {
       const pageUrl = (body.pageUrl ?? '').trim()
       const usePw = Boolean(body.usePlaywright)
@@ -127,6 +168,13 @@ export class AgentController {
         playwrightSlowMoMs: body.slowMoMs ?? 0,
       } as typeof BrowserTestState.Update
 
+      await this.chatPersistence.recordUserTurn({
+        sessionId: chatSessionId,
+        threadId,
+        userInput: body.userInput ?? '',
+        pageUrl,
+      })
+
       const stream = await this.graph.stream(input, {
         configurable: { thread_id: threadId },
         streamMode: 'updates',
@@ -134,6 +182,10 @@ export class AgentController {
       for await (const ev of stream) {
         const events = extractStreamEventsFromGraphStreamChunk(ev)
         for (const e of events) {
+          if (e.type === 'text') {
+            const pl = e.payload as { content?: unknown } | undefined
+            if (typeof pl?.content === 'string' && pl.content) assistantTextBuf += pl.content
+          }
           send({ event: e.type, ...e })
         }
       }
@@ -147,6 +199,13 @@ export class AgentController {
       } catch {
         /* 图未产生 checkpoint 等 */
       }
+      await this.chatPersistence
+        .recordAssistantTurn({
+          sessionId: chatSessionId,
+          threadId,
+          content: assistantTextBuf,
+        })
+        .catch(() => {})
       res.write('data: [DONE]\n\n')
       res.end()
     }

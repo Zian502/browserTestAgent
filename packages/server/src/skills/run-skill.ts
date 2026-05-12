@@ -57,14 +57,25 @@ export async function runSkill(
     const t1 = Date.now()
     const ok = result['ok'] !== false
     if (ok) {
+      const payload: Record<string, unknown> = {
+        skill: id,
+        durationMs: t1 - t0,
+      }
+      /** `report` skill 返回 `reports` / `outcomes`，供扩展侧「查看报告」拉取 HTML */
+      if (id === 'report' && result && typeof result === 'object') {
+        const r = result as Record<string, unknown>
+        if (r['reports'] != null && typeof r['reports'] === 'object') {
+          payload['reports'] = r['reports']
+        }
+        if (Array.isArray(r['outcomes'])) {
+          payload['outcomes'] = r['outcomes']
+        }
+      }
       ctx.emit({
         type: 'skill_success',
         agentName: ctx.agentName,
         taskId: ctx.taskId,
-        payload: {
-          skill: id,
-          durationMs: t1 - t0,
-        },
+        payload,
         timestamp: t1,
       })
     } else {

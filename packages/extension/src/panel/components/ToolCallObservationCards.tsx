@@ -1,9 +1,10 @@
 import { useMemo, useState, type CSSProperties } from 'react'
 import { useTaskStore, type AgentObservationLogEntry } from '../stores/task-store'
+import { AGENT_API_BASE } from '../agent-api-base'
 import { MarkdownFromStaticText } from './MarkdownFromStaticText'
 import { RunTestCodeModal, type RunTestCodeModalParams } from './RunTestCodeModal'
 
-/** 与 `packages/server/src/agents/state.ts` 中 StreamEvent.type 对齐 */
+/** 与 `packages/server/src/agents/state.ts` 中 StreamEvent.type 对齐（含 MCP 观测） */
 type InvocationStreamKind =
   | 'tool_start'
   | 'tool_success'
@@ -11,6 +12,8 @@ type InvocationStreamKind =
   | 'skill_start'
   | 'skill_success'
   | 'skill_failure'
+  | 'mcp_call'
+  | 'mcp_result'
 
 function observationKind(data: unknown): InvocationStreamKind | undefined {
   if (!data || typeof data !== 'object') return undefined
@@ -21,7 +24,9 @@ function observationKind(data: unknown): InvocationStreamKind | undefined {
     k === 'tool_failure' ||
     k === 'skill_start' ||
     k === 'skill_success' ||
-    k === 'skill_failure'
+    k === 'skill_failure' ||
+    k === 'mcp_call' ||
+    k === 'mcp_result'
   ) {
     return k
   }
@@ -42,9 +47,16 @@ function extractSkill(data: unknown): string {
   return 'skill'
 }
 
+function extractMcp(data: unknown): string {
+  if (data && typeof data === 'object' && 'mcp' in data) {
+    return String((data as { mcp?: unknown }).mcp ?? 'mcp')
+  }
+  return 'mcp'
+}
+
 type MergedCardStatus = 'running' | 'done' | 'failed'
 
-type InvocationRealm = 'tool' | 'skill'
+type InvocationRealm = 'tool' | 'skill' | 'mcp'
 
 interface MergedInvocationCard {
   id: string
@@ -69,21 +81,31 @@ interface PendingMatch {
 function startKindToRealm(k: InvocationStreamKind): InvocationRealm | null {
   if (k === 'tool_start') return 'tool'
   if (k === 'skill_start') return 'skill'
+  if (k === 'mcp_call') return 'mcp'
   return null
 }
 
 function endKindToRealm(k: InvocationStreamKind): InvocationRealm | null {
   if (k === 'tool_success' || k === 'tool_failure') return 'tool'
   if (k === 'skill_success' || k === 'skill_failure') return 'skill'
+  if (k === 'mcp_result') return 'mcp'
   return null
 }
 
 function extractKey(realm: InvocationRealm, data: unknown): string {
-  return realm === 'tool' ? extractTool(data) : extractSkill(data)
+  if (realm === 'tool') return extractTool(data)
+  if (realm === 'skill') return extractSkill(data)
+  return extractMcp(data)
 }
 
-function isSuccessKind(k: InvocationStreamKind): boolean {
-  return k === 'tool_success' || k === 'skill_success'
+/** 结束事件是否视为成功（mcp_result 需读 payload.ok） */
+function isEndSuccess(kind: InvocationStreamKind, data: unknown): boolean {
+  if (kind === 'tool_success' || kind === 'skill_success') return true
+  if (kind === 'mcp_result') {
+    if (!data || typeof data !== 'object') return false
+    return (data as Record<string, unknown>).ok === true
+  }
+  return false
 }
 
 /** 将 tool_start / skill_start 与同 agent 的 success、failure 配对合并 */
@@ -118,7 +140,7 @@ function mergeInvocationObservationLog(log: AgentObservationLogEntry[]): MergedI
 
     const key = extractKey(endRealm, entry.data)
     const idx = pending.findIndex((p) => p.agentName === entry.agentName && p.realm === endRealm && p.key === key)
-    const ok = isSuccessKind(k)
+    const ok = isEndSuccess(k, entry.data)
 
     if (idx >= 0) {
       const { rowIndex } = pending[idx]
@@ -158,12 +180,14 @@ function sliceJsonBody(data: unknown, max = 8000): string {
 }
 
 function realmLabelZh(realm: InvocationRealm): string {
-  return realm === 'tool' ? '工具' : 'Skill'
+  if (realm === 'tool') return '工具'
+  if (realm === 'skill') return 'Skill'
+  return 'MCP'
 }
 
 /** 卡片标题：工具用 tool 名；Skill 优先展示友好 name，否则 skill id */
 function cardDisplayTitle(card: MergedInvocationCard): string {
-  if (card.realm === 'tool') return card.key
+  if (card.realm === 'tool' || card.realm === 'mcp') return card.key
   const raw = card.callEntry?.data ?? card.resultEntry?.data
   if (raw && typeof raw === 'object' && 'name' in raw) {
     const n = String((raw as { name?: unknown }).name ?? '').trim()
@@ -173,9 +197,98 @@ function cardDisplayTitle(card: MergedInvocationCard): string {
 }
 
 const RUN_TEST_CODE_SKILL_ID = 'run-test-code'
+const REPORT_SKILL_ID = 'report'
+
+const SEO_ANALYSIS_TOOL_KEY = 'seo_llm_analysis'
+const PAGESPEED_MCP_KEY = 'pagespeed'
+
+const REPORT_TYPE_ORDER = ['test', 'seo', 'pagespeed'] as const
 
 function isRunTestCodeSkill(card: MergedInvocationCard): boolean {
   return card.realm === 'skill' && card.key === RUN_TEST_CODE_SKILL_ID
+}
+
+function isReportSkill(card: MergedInvocationCard): boolean {
+  return card.realm === 'skill' && card.key === REPORT_SKILL_ID
+}
+
+/** SEO 分析工具卡片（与 `seo-agent` 中 `SEO_LLM_ANALYSIS_TOOL` 一致） */
+function isSeoAnalysisToolCard(card: MergedInvocationCard): boolean {
+  return card.realm === 'tool' && card.agentName === 'seoAgent' && card.key === SEO_ANALYSIS_TOOL_KEY
+}
+
+/** PageSpeed MCP 卡片（与 `pagespeed-agent` 中 mcp 名 `pagespeed` 一致） */
+function isPagespeedMcpCard(card: MergedInvocationCard): boolean {
+  return card.realm === 'mcp' && card.agentName === 'pagespeedAgent' && card.key === PAGESPEED_MCP_KEY
+}
+
+/** `report_ready` 写入 store 后的 HTML 报告路径（相对 `.agent-cache`） */
+function storeReportPathForAgentCard(card: MergedInvocationCard, reports: Record<string, string>): string | null {
+  if (isSeoAnalysisToolCard(card)) {
+    const p = reports['seo']?.trim()
+    return p || null
+  }
+  if (isPagespeedMcpCard(card)) {
+    const p = reports['pagespeed']?.trim()
+    return p || null
+  }
+  return null
+}
+
+function extractReportsMapFromPayload(data: unknown): Record<string, string> | null {
+  if (!data || typeof data !== 'object') return null
+  const reports = (data as Record<string, unknown>).reports
+  if (!reports || typeof reports !== 'object') return null
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(reports)) {
+    const p = String(v ?? '').trim()
+    if (p) out[k] = p
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+function reportTypeLabelZh(type: string): string {
+  if (type === 'test') return '测试报告'
+  if (type === 'seo') return 'SEO 报告'
+  if (type === 'pagespeed') return '性能报告'
+  return type
+}
+
+/** 从 skill_success / 观测 payload 中解析报告相对路径（相对 `.agent-cache`） */
+function reportEntriesFromCard(card: MergedInvocationCard): { type: string; path: string; label: string }[] {
+  const map =
+    extractReportsMapFromPayload(card.resultEntry?.data) ?? extractReportsMapFromPayload(card.callEntry?.data)
+  if (!map) return []
+  const seen = new Set<string>()
+  const out: { type: string; path: string; label: string }[] = []
+  for (const t of REPORT_TYPE_ORDER) {
+    const p = map[t]
+    if (p && !seen.has(p)) {
+      seen.add(p)
+      out.push({ type: t, path: p, label: reportTypeLabelZh(t) })
+    }
+  }
+  for (const [t, p] of Object.entries(map)) {
+    if (seen.has(p)) continue
+    seen.add(p)
+    out.push({ type: t, path: p, label: reportTypeLabelZh(t) })
+  }
+  return out
+}
+
+async function fetchReportHtmlAndOpenTab(relativePath: string): Promise<void> {
+  const url = new URL('/api/agent/report-html', AGENT_API_BASE)
+  url.searchParams.set('path', relativePath)
+  const res = await fetch(url.toString())
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '')
+    throw new Error(errText || `${res.status} ${res.statusText}`)
+  }
+  const html = await res.text()
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+  const blobUrl = URL.createObjectURL(blob)
+  window.open(blobUrl, '_blank', 'noopener,noreferrer')
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 120_000)
 }
 
 /** 从 skill_start 等观测 `data`（含 `skill` + `input`）解析弹窗所需参数 */
@@ -213,7 +326,7 @@ function mergedCardMarkdown(card: MergedInvocationCard): string {
     '',
     `- **类型**：${realmLabelZh(card.realm)}`,
     `- **Agent**：\`${card.agentName}\``,
-    `- **${card.realm === 'tool' ? '工具' : 'Skill'}**：\`${card.key}\``,
+    `- **${card.realm === 'tool' ? '工具' : card.realm === 'skill' ? 'Skill' : 'MCP'}**：\`${card.key}\``,
   ]
   if (card.summary) lines.push('', card.summary)
   if (card.callEntry?.data) {
@@ -352,6 +465,23 @@ function CodeEditorGlyph(props: { size?: number }) {
   )
 }
 
+/** 文档 / 报告预览 */
+function ReportDocGlyph(props: { size?: number }) {
+  const s = props.size ?? 14
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M8 13h8M8 17h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 const codeActionBtn: CSSProperties = {
   flexShrink: 0,
   alignSelf: 'flex-start',
@@ -380,10 +510,24 @@ function InvocationCard(props: { card: MergedInvocationCard }) {
   const [codeModalParams, setCodeModalParams] = useState<RunTestCodeModalParams | null>(null)
   const [codeBtnHover, setCodeBtnHover] = useState(false)
   const [codeBtnFocus, setCodeBtnFocus] = useState(false)
+  const [reportOpeningPath, setReportOpeningPath] = useState<string | null>(null)
   const { card } = props
+
+  const reportsFromStore = useTaskStore((s) => s.reports)
+  const agentReportPath = storeReportPathForAgentCard(card, reportsFromStore)
+  const agentReportLabel = isSeoAnalysisToolCard(card)
+    ? 'SEO HTML 报告'
+    : isPagespeedMcpCard(card)
+      ? '性能 HTML 报告'
+      : 'HTML 报告'
+  const canOpenAgentHtmlReport =
+    Boolean(agentReportPath) && card.status === 'done' && (isSeoAnalysisToolCard(card) || isPagespeedMcpCard(card))
 
   const runTestSnapshot = runTestCodeModalParamsFromCard(card)
   const canOpenRunTestCodeModal = Boolean(runTestSnapshot)
+
+  const reportEntries = isReportSkill(card) ? reportEntriesFromCard(card) : []
+  const canOpenReportTabs = isReportSkill(card) && reportEntries.length > 0 && card.status !== 'running'
 
   function openRunTestCodeModal() {
     const p = runTestCodeModalParamsFromCard(card)
@@ -395,6 +539,17 @@ function InvocationCard(props: { card: MergedInvocationCard }) {
   function closeRunTestCodeModal() {
     setCodeModalOpen(false)
     setCodeModalParams(null)
+  }
+
+  async function openReportInNewTab(relativePath: string) {
+    try {
+      setReportOpeningPath(relativePath)
+      await fetchReportHtmlAndOpenTab(relativePath)
+    } catch (e) {
+      window.alert(`打开报告失败：${String(e)}`)
+    } finally {
+      setReportOpeningPath(null)
+    }
   }
 
   return (
@@ -417,7 +572,9 @@ function InvocationCard(props: { card: MergedInvocationCard }) {
             <StatusIcon status={card.status} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                <span style={realmBadge}>{card.realm === 'tool' ? 'TOOL' : 'SKILL'}</span>
+                <span style={realmBadge}>
+                  {card.realm === 'tool' ? 'TOOL' : card.realm === 'skill' ? 'SKILL' : 'MCP'}
+                </span>
                 <div style={titleStyle}>{cardDisplayTitle(card)}</div>
               </div>
               {card.summary ? <div style={summaryStyle}>{card.summary}</div> : null}
@@ -427,30 +584,91 @@ function InvocationCard(props: { card: MergedInvocationCard }) {
             {open ? '▼' : '▶'}
           </span>
         </button>
-        {canOpenRunTestCodeModal ? (
-          <button
-            type="button"
-            style={{
-              ...codeActionBtn,
-              background: codeBtnHover ? '#f4f4f5' : '#ffffff',
-              borderColor: codeBtnHover ? '#d4d4d8' : '#e4e4e7',
-              color: codeBtnHover ? '#2563eb' : '#52525b',
-              boxShadow: codeBtnFocus ? '0 0 0 2px #ffffff, 0 0 0 4px #93c5fd' : 'none',
-            }}
-            title="打开编辑器并执行测试代码"
-            aria-label="打开编辑器并执行测试代码"
-            onPointerEnter={() => setCodeBtnHover(true)}
-            onPointerLeave={() => setCodeBtnHover(false)}
-            onFocus={() => setCodeBtnFocus(true)}
-            onBlur={() => setCodeBtnFocus(false)}
-            onClick={(e) => {
-              e.preventDefault()
-              openRunTestCodeModal()
-            }}
-          >
-            <CodeEditorGlyph size={14} />
-          </button>
-        ) : null}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            gap: 4,
+            flexShrink: 0,
+            paddingTop: 4,
+            paddingRight: 4,
+          }}
+        >
+          {canOpenAgentHtmlReport && agentReportPath ? (
+            <button
+              type="button"
+              style={{
+                ...codeActionBtn,
+                marginTop: 2,
+                marginRight: 0,
+                opacity: reportOpeningPath !== null ? 0.45 : 1,
+                cursor: reportOpeningPath !== null ? 'wait' : 'pointer',
+              }}
+              title={`新标签页查看：${agentReportLabel}`}
+              aria-label={`新标签页查看：${agentReportLabel}`}
+              disabled={reportOpeningPath !== null}
+              onClick={(e) => {
+                e.preventDefault()
+                void openReportInNewTab(agentReportPath)
+              }}
+            >
+              <ReportDocGlyph size={14} />
+            </button>
+          ) : null}
+          {canOpenReportTabs
+            ? reportEntries.map((rep) => {
+                const busy = reportOpeningPath !== null
+                return (
+                  <button
+                    key={rep.path}
+                    type="button"
+                    style={{
+                      ...codeActionBtn,
+                      marginTop: 2,
+                      marginRight: 0,
+                      opacity: busy ? 0.45 : 1,
+                      cursor: busy ? 'wait' : 'pointer',
+                    }}
+                    title={`新标签页查看：${rep.label}`}
+                    aria-label={`新标签页查看：${rep.label}`}
+                    disabled={busy}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      void openReportInNewTab(rep.path)
+                    }}
+                  >
+                    <ReportDocGlyph size={14} />
+                  </button>
+                )
+              })
+            : null}
+          {canOpenRunTestCodeModal ? (
+            <button
+              type="button"
+              style={{
+                ...codeActionBtn,
+                marginTop: 2,
+                background: codeBtnHover ? '#f4f4f5' : '#ffffff',
+                borderColor: codeBtnHover ? '#d4d4d8' : '#e4e4e7',
+                color: codeBtnHover ? '#2563eb' : '#52525b',
+                boxShadow: codeBtnFocus ? '0 0 0 2px #ffffff, 0 0 0 4px #93c5fd' : 'none',
+              }}
+              title="打开编辑器并执行测试代码"
+              aria-label="打开编辑器并执行测试代码"
+              onPointerEnter={() => setCodeBtnHover(true)}
+              onPointerLeave={() => setCodeBtnHover(false)}
+              onFocus={() => setCodeBtnFocus(true)}
+              onBlur={() => setCodeBtnFocus(false)}
+              onClick={(e) => {
+                e.preventDefault()
+                openRunTestCodeModal()
+              }}
+            >
+              <CodeEditorGlyph size={14} />
+            </button>
+          ) : null}
+        </div>
       </div>
       <RunTestCodeModal open={codeModalOpen} onClose={closeRunTestCodeModal} params={codeModalParams} />
       {open ? (

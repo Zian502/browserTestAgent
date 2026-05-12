@@ -20,7 +20,9 @@ export function RunArtifactsPanel() {
         k === 'tool_failure' ||
         k === 'skill_start' ||
         k === 'skill_success' ||
-        k === 'skill_failure'
+        k === 'skill_failure' ||
+        k === 'mcp_call' ||
+        k === 'mcp_result'
       )
     })
   })
