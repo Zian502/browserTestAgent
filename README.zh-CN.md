@@ -4,6 +4,8 @@
 
 **Chrome 扩展 + NestJS 后端**：用自然语言驱动 **结构化页面测试**、**SEO 检查**、**类 PageSpeed 性能信号**，以及 **Playwright 自动化**；编排层为 **LangGraph**，通过 **SSE** 将代理、技能、工具执行过程流式推到扩展面板。
 
+**扩展文档：** [产品与架构总览](./docs/product-architecture-overview.zh-CN.md) · [压缩 HTML 与 PageDSL 生成设计](./docs/parse-html-dsl-design.md)
+
 ---
 
 ## 亮点速览
@@ -17,6 +19,7 @@
 | **流式体验** | `POST /api/agent/run` 使用 **SSE**；事件覆盖代理起止、技能、工具、类 MCP 的 PageSpeed 调用、Markdown `text`、以及带 `reports` 的 `complete`。 |
 | **扩展端 UX** | React 19 + assistant-ui 思路：对话线程、工具/技能卡片、产物面板；支持 **RunTestCodeModal** 通过 `POST /api/agent/run-test-code` 单独重跑测试代码。 |
 | **文件缓存** | `.agent-cache/` 下持久化 HTML 快照、DSL、测试代码、报告等，减少重复抓取与重复推理，加快二次运行。 |
+| **聊天持久化** | MongoDB（Mongoose）存储会话、用户/助手轮次与 SSE 事件；`GET /api/agent/chat/*` 供扩展拉取历史与 hydration。 |
 
 ---
 
@@ -40,7 +43,7 @@ flowchart LR
 ```
 
 - **扩展**（`packages/extension`）：Manifest V3，默认请求 `http://localhost:3850`（见 `manifest.json` 的 `host_permissions`）。可通过环境变量 **`VITE_AGENT_API`** 覆盖 API 根地址（`agent-api-base.ts`）。
-- **服务端**（`packages/server`）：Nest 应用内嵌编译后的 LangGraph；LLM 走 **OpenAI 兼容协议**（默认 DeepSeek）；Playwright 负责浏览器与测试执行；文件缓存落盘。
+- **服务端**（`packages/server`）：Nest 应用内嵌编译后的 LangGraph；LLM 走 **OpenAI 兼容协议**（默认 DeepSeek）；Playwright 负责浏览器与测试执行；文件缓存落盘；MongoDB 承载聊天与会话事件。
 
 ---
 
@@ -50,6 +53,7 @@ flowchart LR
 browserTestAgent/
 ├── package.json                 # 根脚本：dev:server / dev:extension / build
 ├── pnpm-workspace.yaml
+├── docs/                        # 设计说明（产品架构、HTML→DSL 等）
 ├── packages/
 │   ├── extension/               # Vite + React 浏览器扩展
 │   │   ├── manifest.json
@@ -58,6 +62,7 @@ browserTestAgent/
 │       ├── src/
 │       │   ├── agents/          # 状态机图、状态定义、各 Agent 节点与提示词
 │       │   ├── gateway/         # HTTP + SSE 控制器
+│       │   ├── chat/            # Mongoose 模型与聊天持久化
 │       │   ├── skills/          # 技能注册表与执行管线
 │       │   ├── tools/           # read / write / playwright
 │       │   ├── lib/             # 缓存、Playwright 会话、报告生成等
@@ -83,6 +88,10 @@ browserTestAgent/
 |------------|------|
 | `POST /api/agent/run` | 主流程：请求体含 `userInput`、`pageUrl`，以及可选的 `usePlaywright`、`headless`、`slowMoMs`。响应为 **SSE**，每行 `data: {JSON}`。 |
 | `POST /api/agent/run-test-code` | 扩展侧「重新执行」测试代码：请求体含 `code`，可选 `sessionId`、`targetUrl`、`timeoutMs`。返回 JSON。 |
+| `GET /api/agent/report-html?path=…` | 读取 `.agent-cache` 下已生成的报告 HTML（仅允许 `reports/` 前缀，防路径穿越）。 |
+| `GET /api/agent/chat/sessions` | 列出聊天会话（MongoDB）。 |
+| `GET /api/agent/chat/messages?sessionId=&limit=` | 按会话拉取历史消息（省略 `sessionId` 时用服务端默认会话）。 |
+| `GET /api/agent/chat/sessions/:sessionId/messages` | 按路径参数拉取某会话消息列表。 |
 
 默认监听端口：**3850**（可用环境变量 `PORT` 修改）。
 
@@ -97,7 +106,9 @@ browserTestAgent/
 | `LLM_API_KEY` / `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` 等 | 大模型密钥（具体优先级见 `llm-client.ts`） |
 | `LLM_BASE_URL` / `LLM_MODEL` | 覆盖 OpenAI 兼容 Base URL 与模型名 |
 | `PAGESPEED_API_KEY` / `GOOGLE_PSI_API_KEY` | 真实 PageSpeed Insights；未配置时使用 **占位 stub**，仅便于本地联调 |
+| `MONGODB_URI` | MongoDB 连接串（聊天持久化；默认 `mongodb://127.0.0.1:27017/browser-test-agent`） |
 | `PORT` | HTTP 端口 |
+| `PARSE_HTML_LLM_MAX_CHUNK_CHARS` | （可选）PageDSL 解析时每段压缩 HTML 最大字符数，见 [parse-html-dsl-design.md](./docs/parse-html-dsl-design.md) |
 
 ---
 
@@ -107,6 +118,7 @@ browserTestAgent/
 pnpm install
 # 为 Playwright 安装 Chromium（仅需一次）
 pnpm --filter @browser-test-agent/server run playwright:install
+# 聊天持久化：需可访问的 MongoDB（默认 mongodb://127.0.0.1:27017/browser-test-agent，可用 MONGODB_URI 覆盖）
 
 # 终端 1：后端
 pnpm run dev:server
@@ -141,6 +153,6 @@ pnpm run build
 
 ## 说明
 
-仓库在 `package.json` 中标记为 **private**。请勿将 API 密钥与 `.agent-cache/` 提交到 Git（参见根目录 `.gitignore`）。未配置 PageSpeed API Key 时，性能相关数据为 **占位实现**，不能作为线上性能依据。
+仓库在 `package.json` 中标记为 **private**。请勿将 API 密钥与 `.agent-cache/` 提交到 Git（参见根目录 `.gitignore`）。未配置 PageSpeed API Key 时，性能相关数据为 **占位实现**，不能作为线上性能依据。服务端会将**聊天与 SSE 事件**写入 **MongoDB**，开发环境建议使用独立库实例。
 
 更多英文说明见同仓库 **[README.md](./README.md)**。

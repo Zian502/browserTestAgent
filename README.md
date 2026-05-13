@@ -4,6 +4,8 @@
 
 A **Chrome extension + NestJS backend** that turns natural language into **structured page testing**, **SEO checks**, **PageSpeed-style performance signals**, and **Playwright-driven automation**—orchestrated by **LangGraph** with streaming updates to the panel UI.
 
+**More documentation (Chinese):** [Product & architecture overview](./docs/product-architecture-overview.zh-CN.md) · [HTML compression → PageDSL (LLM chunking)](./docs/parse-html-dsl-design.md)
+
 ---
 
 ## Highlights
@@ -17,6 +19,7 @@ A **Chrome extension + NestJS backend** that turns natural language into **struc
 | **Rich streaming** | SSE from `POST /api/agent/run`; events cover agents, skills, tools, MCP-style PageSpeed calls, markdown `text`, and final `complete` with reports. |
 | **Extension UX** | React 19 + assistant-ui patterns: thread, tool/skill cards, artifacts, **re-run test code** modal calling `POST /api/agent/run-test-code`. |
 | **Caching** | File-backed cache under `.agent-cache/` (HTML snapshots, DSL, test code, reports) to skip redundant work and speed reruns. |
+| **Chat persistence** | MongoDB (Mongoose): sessions, turns, and SSE event trail; `GET /api/agent/chat/*` for listing sessions/messages and hydrating the panel. |
 
 ---
 
@@ -40,7 +43,7 @@ flowchart LR
 ```
 
 - **Extension** (`packages/extension`): MV3, talks to `http://localhost:3850` (see `host_permissions` in `manifest.json`). `VITE_AGENT_API` overrides the API base (`agent-api-base.ts`).
-- **Server** (`packages/server`): NestJS app, LangGraph compiled graph, OpenAI-compatible LLM (default DeepSeek), Playwright, file cache.
+- **Server** (`packages/server`): NestJS app, LangGraph compiled graph, OpenAI-compatible LLM (default DeepSeek), Playwright, file cache, MongoDB chat module.
 
 ---
 
@@ -50,6 +53,7 @@ flowchart LR
 browserTestAgent/
 ├── package.json                 # pnpm workspace root scripts
 ├── pnpm-workspace.yaml
+├── docs/                        # Design notes (product architecture, parse-html → DSL)
 ├── packages/
 │   ├── extension/               # Vite + React Chrome extension
 │   │   ├── manifest.json
@@ -58,6 +62,7 @@ browserTestAgent/
 │       ├── src/
 │       │   ├── agents/          # graph, state, per-agent nodes, prompts
 │       │   ├── gateway/         # HTTP + SSE endpoints
+│       │   ├── chat/            # Mongoose schemas + chat persistence
 │       │   ├── skills/          # Skill registry + run-skill pipeline
 │       │   ├── tools/           # read / write / playwright
 │       │   ├── lib/             # file-cache, playwright session, reports
@@ -83,6 +88,10 @@ browserTestAgent/
 |---------------|---------|
 | `POST /api/agent/run` | Main run: body `{ userInput, pageUrl, usePlaywright?, headless?, slowMoMs? }`. **SSE** stream of JSON events. |
 | `POST /api/agent/run-test-code` | Re-execute Playwright test snippet: `{ sessionId?, code, targetUrl?, timeoutMs? }`. JSON result. |
+| `GET /api/agent/report-html?path=…` | Serve a cached report HTML from under `reports/` only (path traversal blocked). |
+| `GET /api/agent/chat/sessions` | List chat sessions (MongoDB). |
+| `GET /api/agent/chat/messages?sessionId=&limit=` | List messages for a session (default session if omitted). |
+| `GET /api/agent/chat/sessions/:sessionId/messages` | List messages for a given session id. |
 
 Default port: **3850** (`PORT` env overrides).
 
@@ -97,7 +106,9 @@ Place a `.env` near the server or repo root (see `load-env.ts` upward search).
 | `LLM_API_KEY` / `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` | Chat model API key (priority left to right with fallbacks in `llm-client.ts`) |
 | `LLM_BASE_URL` / `LLM_MODEL` | Override OpenAI-compatible endpoint and model |
 | `PAGESPEED_API_KEY` / `GOOGLE_PSI_API_KEY` | Real PageSpeed Insights API; if empty, a **stub** score path is used |
+| `MONGODB_URI` | MongoDB connection string for chat persistence (default `mongodb://127.0.0.1:27017/browser-test-agent`) |
 | `PORT` | HTTP port (default `3850`) |
+| `PARSE_HTML_LLM_MAX_CHUNK_CHARS` | (Optional) Max compressed-HTML chars per LLM chunk for PageDSL parsing; see [parse-html-dsl-design.md](./docs/parse-html-dsl-design.md) |
 
 ---
 
@@ -107,6 +118,7 @@ Place a `.env` near the server or repo root (see `load-env.ts` upward search).
 pnpm install
 # Server: install Chromium for Playwright once
 pnpm --filter @browser-test-agent/server run playwright:install
+# Chat persistence: start MongoDB (default URI mongodb://127.0.0.1:27017/browser-test-agent, override with MONGODB_URI)
 
 # Terminal 1
 pnpm run dev:server
@@ -141,4 +153,4 @@ Produces server `dist/` and extension bundled assets for production.
 
 ## License & notes
 
-This repository is marked **private** in `package.json`. Ensure API keys and `.agent-cache/` stay out of version control (see `.gitignore`). PageSpeed behavior without an API key is **placeholder data** for local development only.
+This repository is marked **private** in `package.json`. Ensure API keys and `.agent-cache/` stay out of version control (see `.gitignore`). PageSpeed behavior without an API key is **placeholder data** for local development only. Chat transcripts and SSE events are stored in **MongoDB** when the server runs—use an isolated database for development.
