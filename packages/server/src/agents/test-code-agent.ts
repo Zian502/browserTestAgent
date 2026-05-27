@@ -1,12 +1,24 @@
-import type { AgentOutput, State, StreamEvent } from './state'
+import type { AgentOutput, State, StreamEvent, TestCodeFragment } from './state'
 import { createChatLlm, hasChatLlm } from './llm-client'
 import { fileCacheService } from '../lib/file-cache'
 import { extractMessageText } from './llm-text'
 import { findTaskId, updateStatus, findStepByTaskId } from './graph-helpers'
-import { TEST_CODE_AGENT_SYSTEM_PROMPT, buildTestCodeUserMessage } from './prompts/test-code-agent.prompt'
+import {
+  TEST_CODE_AGENT_SYSTEM_PROMPT,
+  TEST_CODE_FRAGMENT_SYSTEM_PROMPT,
+  buildTestCodeUserMessage,
+  buildTestCodeFragmentUserMessage,
+} from './prompts/test-code-agent.prompt'
 import { agentObservation } from './agent-observation'
 import { buildRunTestInjectedEnv } from '../lib/run-test-env'
+import { mergeTestCodeFragments } from '../lib/test-code-merge'
 import { runSkill } from '../skills'
+import * as path from 'path'
+import {
+  githubUploadSummary,
+  uploadFinalTestCodeToGithub,
+  type GithubUploadOutcome,
+} from '../lib/upload-test-code-github'
 
 function extractCode(raw: string): string {
   const fence = /^```(?:ts|typescript)?\s*([\s\S]*?)```$/m.exec(raw.trim())
@@ -24,15 +36,47 @@ function rewriteInjectedEnvAccessors(code: string): string {
   return out
 }
 
-export async function testCodeAgentNode(state: State) {
-  const taskId = findTaskId(state.taskPlan, 'testCodeAgent')
-  const task = taskId ? findStepByTaskId(state.taskPlan, taskId) : undefined
-  const cacheKey = task?.cacheKey
+function findParseCacheKeyForFragment(state: State, groupId: string, stepIndex: number): string | undefined {
+  for (const main of state.taskPlan) {
+    if (main.id !== groupId) continue
+    const parseStep = main.subTasks.find(
+      (s) => s.type === 'parseHtml' && s.testStepIndex === stepIndex && s.groupId === groupId,
+    )
+    return parseStep?.cacheKey
+  }
+  return undefined
+}
 
+function getFragmentStepContext(
+  state: State,
+  groupId: string | undefined,
+  stepIndex: number,
+): { stepIndex: number; totalSteps: number; priorStepTitles: string[] } {
+  if (!groupId) return { stepIndex, totalSteps: 1, priorStepTitles: [] }
+  for (const main of state.taskPlan) {
+    if (main.id !== groupId) continue
+    const fragments = main.subTasks
+      .filter((s) => s.type === 'testCode' && s.testStepRole === 'fragment')
+      .sort((a, b) => (a.testStepIndex ?? 0) - (b.testStepIndex ?? 0))
+    return {
+      stepIndex,
+      totalSteps: fragments.length || 1,
+      priorStepTitles: fragments.filter((s) => (s.testStepIndex ?? 0) < stepIndex).map((s) => s.title),
+    }
+  }
+  return { stepIndex, totalSteps: 1, priorStepTitles: [] }
+}
+
+async function generateTestCode(
+  state: State,
+  task: ReturnType<typeof findStepByTaskId>,
+  reuseOpenPage: boolean,
+): Promise<string> {
   const dsl = state.pageDSL
   if (!dsl) throw new Error('pageDSL 未就绪')
 
-  const reuseOpenPage = Boolean(state.usePlaywrightBrowser && state.runnerSessionId)
+  const isFragment = task?.testStepRole === 'fragment'
+  const stepTitle = task?.title?.trim() ?? ''
 
   let code = reuseOpenPage
     ? `import { test, expect } from '@playwright/test';\n\ntest('smoke', async ({ page }) => {\n  await expect(page.locator('body')).toBeVisible();\n});\n`
@@ -40,23 +84,41 @@ export async function testCodeAgentNode(state: State) {
 
   if (hasChatLlm()) {
     const model = createChatLlm({ temperature: 0.1 })
-    const fullCodeResp = await model.invoke([
-      { role: 'system', content: TEST_CODE_AGENT_SYSTEM_PROMPT },
-      {
-        role: 'user',
-        content: buildTestCodeUserMessage(state.userInput, JSON.stringify(dsl, null, 2), state.pageUrl, {
+    const dslJson = JSON.stringify(dsl, null, 2)
+    const stepCtx =
+      isFragment && task?.groupId != null
+        ? getFragmentStepContext(state, task.groupId, task.testStepIndex ?? 0)
+        : undefined
+    const userContent = isFragment
+      ? buildTestCodeFragmentUserMessage(stepTitle, state.userInput, dslJson, state.pageUrl, {
           reuseOpenPage,
-        }),
-      },
+          stepIndex: stepCtx?.stepIndex,
+          totalSteps: stepCtx?.totalSteps,
+          priorStepTitles: stepCtx?.priorStepTitles,
+        })
+      : buildTestCodeUserMessage(state.userInput, dslJson, state.pageUrl, {
+          reuseOpenPage,
+          stepTitle: stepTitle || undefined,
+        })
+
+    const fullCodeResp = await model.invoke([
+      { role: 'system', content: isFragment ? TEST_CODE_FRAGMENT_SYSTEM_PROMPT : TEST_CODE_AGENT_SYSTEM_PROMPT },
+      { role: 'user', content: userContent },
     ])
     code = rewriteInjectedEnvAccessors(extractCode(extractMessageText(fullCodeResp.content)))
   }
 
-  const streamEvents: StreamEvent[] = []
-  const emit = (e: StreamEvent) => {
-    streamEvents.push(e)
-  }
-  const out = await runSkill(
+  return code
+}
+
+async function runGeneratedTest(
+  state: State,
+  taskId: string | undefined,
+  code: string,
+  emit: (e: StreamEvent) => void,
+  testStepRole?: string,
+) {
+  return runSkill(
     'run-test-code',
     { state, agentName: 'testCodeAgent', taskId, emit },
     {
@@ -64,8 +126,266 @@ export async function testCodeAgentNode(state: State) {
       targetUrl: state.pageUrl,
       sessionId: state.runnerSessionId,
       timeoutMs: 90_000,
+      ...(testStepRole ? { testStepRole } : {}),
     },
   )
+}
+
+async function uploadPersistedSpecToGithub(
+  state: State,
+  persisted: { tsRelative: string; specSlug: string },
+  code: string,
+  taskTitle?: string,
+): Promise<GithubUploadOutcome | undefined> {
+  const fileName = path.basename(persisted.tsRelative)
+  return uploadFinalTestCodeToGithub(state.userId, {
+    fileName,
+    content: code,
+    specSlug: persisted.specSlug,
+    taskTitle,
+  })
+}
+
+export async function testCodeAgentNode(state: State) {
+  const taskId = findTaskId(state.taskPlan, 'testCodeAgent')
+  const task = taskId ? findStepByTaskId(state.taskPlan, taskId) : undefined
+  const cacheKey = task?.cacheKey
+  const groupId = task?.groupId
+  const role = task?.testStepRole
+
+  const reuseOpenPage = Boolean(state.usePlaywrightBrowser && state.runnerSessionId)
+
+  const streamEvents: StreamEvent[] = []
+  const emit = (e: StreamEvent) => {
+    streamEvents.push(e)
+  }
+
+  /** 合并子任务：串联各片段，执行并持久化完整 spec */
+  if (role === 'merge' && groupId) {
+    const stored = state.testCodeFragments[groupId] ?? []
+    const fragmentCodes = stored.map((f) => f.code)
+    if (fragmentCodes.length === 0) {
+      throw new Error(`主任务 ${groupId} 无可用测试片段，无法合并`)
+    }
+
+    const code = mergeTestCodeFragments(fragmentCodes)
+    const out = await runGeneratedTest(state, taskId, code, emit, 'merge')
+
+    if (out['ok'] !== true) {
+      const err = String(out['error'] ?? 'run-test-code 失败')
+      return {
+        agentOutputs: { testCodeAgent: { status: 'failed', error: err } },
+        taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'failed') : state.taskPlan,
+        streamEvents: [
+          ...streamEvents,
+          agentObservation('testCodeAgent', 'failed', { taskId, summary: err, data: { error: err } }),
+          {
+            type: 'agent_failed' as const,
+            agentName: 'testCodeAgent' as const,
+            taskId,
+            payload: { message: err },
+            timestamp: Date.now(),
+          },
+        ],
+      }
+    }
+
+    const testResult = {
+      passed: Number(out['passed'] ?? 0),
+      failed: Number(out['failed'] ?? 0),
+      skipped: Boolean(out['skipped']),
+      logs: Array.isArray(out['logs']) ? (out['logs'] as string[]) : [],
+    }
+
+    const persistKey = cacheKey ?? `${state.pageUrl}::${groupId}::merged`
+    const persisted = await fileCacheService.persistTestCodeArtifacts({
+      cacheKey: persistKey,
+      userInput: state.userInput,
+      taskTitle: task?.title ?? `合并测试：${groupId}`,
+      pageUrl: state.pageUrl,
+      code,
+      passed: testResult.passed,
+      failed: testResult.failed,
+      skipped: testResult.skipped,
+    })
+
+    const githubOutcome = await uploadPersistedSpecToGithub(
+      state,
+      persisted,
+      code,
+      task?.title ?? `合并测试：${groupId}`,
+    )
+    const githubSummary = githubOutcome ? githubUploadSummary(githubOutcome) : undefined
+
+    return {
+      agentOutputs: {
+        testCodeAgent: {
+          status: 'done',
+          data: { code, testResult, merged: true, ...persisted, github: githubOutcome ?? null },
+        },
+      },
+      taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'done') : state.taskPlan,
+      streamEvents: [
+        ...streamEvents,
+        agentObservation('testCodeAgent', 'done', {
+          taskId,
+          summary: [
+            `已合并 ${fragmentCodes.length} 段测试；Playwright 通过 ${testResult.passed}，失败 ${testResult.failed}`,
+            githubSummary,
+          ]
+            .filter(Boolean)
+            .join('；'),
+          data: {
+            fragmentCount: fragmentCodes.length,
+            codeLength: code.length,
+            specRelative: persisted.tsRelative,
+            passed: testResult.passed,
+            failed: testResult.failed,
+            github:
+              githubOutcome && 'result' in githubOutcome && githubOutcome.ok
+                ? githubOutcome.result
+                : githubOutcome && 'error' in githubOutcome
+                  ? { error: githubOutcome.error }
+                  : undefined,
+          },
+        }),
+        {
+          type: 'agent_done' as const,
+          agentName: 'testCodeAgent' as const,
+          taskId,
+          payload: { passed: testResult.passed, failed: testResult.failed, merged: true },
+          timestamp: Date.now(),
+        },
+      ],
+    }
+  }
+
+  /** 片段子任务：仅生成本步 test，缓存片段，单独执行校验 */
+  if (role === 'fragment' && groupId && task) {
+    const stepIndex = task.testStepIndex ?? 0
+    let code: string
+    try {
+      code = await generateTestCode(state, task, reuseOpenPage)
+    } catch (e) {
+      const err = String(e)
+      return {
+        agentOutputs: { testCodeAgent: { status: 'failed', error: err } },
+        taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'failed') : state.taskPlan,
+        streamEvents: [
+          agentObservation('testCodeAgent', 'failed', { taskId, summary: err }),
+          {
+            type: 'agent_failed' as const,
+            agentName: 'testCodeAgent' as const,
+            taskId,
+            payload: { message: err },
+            timestamp: Date.now(),
+          },
+        ],
+      }
+    }
+
+    const parseCacheKey = findParseCacheKeyForFragment(state, groupId, stepIndex)
+    const fragment: TestCodeFragment = {
+      taskId: task.id,
+      stepIndex,
+      title: task.title,
+      code,
+      cacheKey: cacheKey ?? task.id,
+      dslCacheKey: parseCacheKey,
+    }
+
+    const fragmentRel = `testCode/fragments/${fileCacheService.artifactIdFromKey(fragment.cacheKey)}.ts`
+    await fileCacheService.writeFile(fragmentRel, code)
+
+    const out = await runGeneratedTest(state, taskId, code, emit, 'fragment')
+
+    if (out['ok'] !== true) {
+      const err = String(out['error'] ?? 'run-test-code 失败')
+      return {
+        testCodeFragments: { [groupId]: [fragment] },
+        agentOutputs: { testCodeAgent: { status: 'failed', error: err } },
+        taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'failed') : state.taskPlan,
+        streamEvents: [
+          ...streamEvents,
+          agentObservation('testCodeAgent', 'failed', {
+            taskId,
+            summary: err,
+            data: { stepIndex, fragmentRelative: fragmentRel },
+          }),
+          {
+            type: 'agent_failed' as const,
+            agentName: 'testCodeAgent' as const,
+            taskId,
+            payload: { message: err },
+            timestamp: Date.now(),
+          },
+        ],
+      }
+    }
+
+    const testResult = {
+      passed: Number(out['passed'] ?? 0),
+      failed: Number(out['failed'] ?? 0),
+      skipped: Boolean(out['skipped']),
+      logs: Array.isArray(out['logs']) ? (out['logs'] as string[]) : [],
+    }
+
+    return {
+      testCodeFragments: { [groupId]: [fragment] },
+      agentOutputs: {
+        testCodeAgent: {
+          status: 'done',
+          data: { code, testResult, fragment: true, stepIndex, fragmentRelative: fragmentRel },
+        },
+      },
+      taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'done') : state.taskPlan,
+      streamEvents: [
+        ...streamEvents,
+        agentObservation('testCodeAgent', 'done', {
+          taskId,
+          summary: `测试片段 ${stepIndex + 1}：${task.title}（通过 ${testResult.passed}，失败 ${testResult.failed}）`,
+          data: {
+            stepIndex,
+            fragmentRelative: fragmentRel,
+            dslCacheKey: parseCacheKey ?? null,
+            passed: testResult.passed,
+            failed: testResult.failed,
+          },
+        }),
+        {
+          type: 'agent_done' as const,
+          agentName: 'testCodeAgent' as const,
+          taskId,
+          payload: { passed: testResult.passed, failed: testResult.failed, fragment: true, stepIndex },
+          timestamp: Date.now(),
+        },
+      ],
+    }
+  }
+
+  /**  legacy 单段 test 主任务 */
+  let code: string
+  try {
+    code = await generateTestCode(state, task, reuseOpenPage)
+  } catch (e) {
+    const err = String(e)
+    return {
+      agentOutputs: { testCodeAgent: { status: 'failed', error: err } },
+      taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'failed') : state.taskPlan,
+      streamEvents: [
+        agentObservation('testCodeAgent', 'failed', { taskId, summary: err }),
+        {
+          type: 'agent_failed' as const,
+          agentName: 'testCodeAgent' as const,
+          taskId,
+          payload: { message: err },
+          timestamp: Date.now(),
+        },
+      ],
+    }
+  }
+
+  const out = await runGeneratedTest(state, taskId, code, emit, task?.testStepRole)
 
   if (out['ok'] !== true) {
     const err = String(out['error'] ?? 'run-test-code 失败')
@@ -74,11 +394,7 @@ export async function testCodeAgentNode(state: State) {
       taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'failed') : state.taskPlan,
       streamEvents: [
         ...streamEvents,
-        agentObservation('testCodeAgent', 'failed', {
-          taskId,
-          summary: err,
-          data: { error: err },
-        }),
+        agentObservation('testCodeAgent', 'failed', { taskId, summary: err, data: { error: err } }),
         {
           type: 'agent_failed' as const,
           agentName: 'testCodeAgent' as const,
@@ -98,7 +414,7 @@ export async function testCodeAgentNode(state: State) {
   }
 
   const persistKey = cacheKey ?? `${state.pageUrl}::${state.userInput}::testCode`
-  await fileCacheService.persistTestCodeArtifacts({
+  const persisted = await fileCacheService.persistTestCodeArtifacts({
     cacheKey: persistKey,
     userInput: state.userInput,
     taskTitle: task?.title,
@@ -109,7 +425,13 @@ export async function testCodeAgentNode(state: State) {
     skipped: testResult.skipped,
   })
 
-  const doneOutput: AgentOutput = { status: 'done', data: { code, testResult } }
+  const githubOutcome = await uploadPersistedSpecToGithub(state, persisted, code, task?.title)
+  const githubSummary = githubOutcome ? githubUploadSummary(githubOutcome) : undefined
+
+  const doneOutput: AgentOutput = {
+    status: 'done',
+    data: { code, testResult, ...persisted, github: githubOutcome ?? null },
+  }
 
   return {
     agentOutputs: { testCodeAgent: doneOutput },
@@ -118,12 +440,21 @@ export async function testCodeAgentNode(state: State) {
       ...streamEvents,
       agentObservation('testCodeAgent', 'done', {
         taskId,
-        summary: `Playwright：通过 ${testResult.passed}，失败 ${testResult.failed}`,
+        summary: [`Playwright：通过 ${testResult.passed}，失败 ${testResult.failed}`, githubSummary]
+          .filter(Boolean)
+          .join('；'),
         data: {
           codeLength: code.length,
+          specRelative: persisted.tsRelative,
           passed: testResult.passed,
           failed: testResult.failed,
           testResult,
+          github:
+            githubOutcome && 'result' in githubOutcome && githubOutcome.ok
+              ? githubOutcome.result
+              : githubOutcome && 'error' in githubOutcome
+                ? { error: githubOutcome.error }
+                : undefined,
         },
       }),
       {

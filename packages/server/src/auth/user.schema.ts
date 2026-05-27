@@ -27,6 +27,10 @@ export class User {
   /** GitHub OAuth access token，仅服务端用于退出时撤销授权 */
   @Prop({ select: false })
   githubAccessToken?: string
+
+  /** 用户名下 playwright 测试代码仓库，如 `login/playwright-test-code` */
+  @Prop()
+  playwrightTestRepoFullName?: string
 }
 
 export const UserSchema = SchemaFactory.createForClass(User)

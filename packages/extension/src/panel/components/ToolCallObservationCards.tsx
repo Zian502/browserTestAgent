@@ -312,8 +312,27 @@ function extractRunTestCodeParamsFromObservationData(data: unknown): RunTestCode
   }
 }
 
+function runTestStepRoleFromObservationData(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object') return undefined
+  const root = data as Record<string, unknown>
+  const input = root.input
+  if (!input || typeof input !== 'object') return undefined
+  const role = (input as Record<string, unknown>).testStepRole
+  return typeof role === 'string' ? role : undefined
+}
+
+/** 片段阶段的 run-test-code 不展示「打开编辑器并执行」按钮，仅合并后的完整 spec 展示。 */
+function shouldShowRunTestCodeExecuteButton(card: MergedInvocationCard): boolean {
+  if (!isRunTestCodeSkill(card)) return false
+  const role =
+    runTestStepRoleFromObservationData(card.callEntry?.data) ??
+    runTestStepRoleFromObservationData(card.resultEntry?.data)
+  return role !== 'fragment'
+}
+
 function runTestCodeModalParamsFromCard(card: MergedInvocationCard): RunTestCodeModalParams | null {
   if (!isRunTestCodeSkill(card)) return null
+  if (!shouldShowRunTestCodeExecuteButton(card)) return null
   return (
     extractRunTestCodeParamsFromObservationData(card.callEntry?.data) ??
     extractRunTestCodeParamsFromObservationData(card.resultEntry?.data)

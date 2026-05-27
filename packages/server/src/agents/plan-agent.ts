@@ -56,19 +56,48 @@ interface LlmSubTaskDraft {
   title?: string
 }
 
+interface LlmTestStepDraft {
+  title?: string
+}
+
 interface LlmMainTaskDraft {
   id?: string
   title?: string
   pipeline?: string
   subTasks?: LlmSubTaskDraft[]
+  testSteps?: LlmTestStepDraft[]
 }
 
 interface MainTaskBuildInput {
   id?: string
   title?: string
   pipeline: PipelineKind
-  /** 与 `expectedSubTaskKinds(pipeline)` 对齐的 3 项；缺省由服务端填标题 */
+  /** seo/perf：与 expectedSubTaskKinds 对齐的 3 项标题 */
   subTaskTitles?: [string, string, string]
+  /** test：多段测试步骤标题（每段 parse→testCode 片段→合并） */
+  testSteps?: string[]
+}
+
+function parseTestSteps(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue
+    const t = String((row as LlmTestStepDraft).title ?? '').trim()
+    if (t) out.push(t)
+  }
+  return out
+}
+
+function defaultTestStepTitles(userInput: string, intent: string): string[] {
+  const u = userInput.toLowerCase()
+  if (/登录|login|sign\s*in|账号|密码/.test(u)) {
+    return [
+      '点击登录入口并断言登录弹框/层可见',
+      '在弹框内填写账号密码并提交，断言登录结果',
+    ]
+  }
+  return [`生成「${intent || '需求'}」相关 Playwright 测试（保留英文 kebab 关键词便于命名）`]
 }
 
 function parseMainTasksFromLlmText(text: string): MainTaskBuildInput[] {
@@ -97,10 +126,13 @@ function normalizeLlmMainTasks(raw: unknown[]): MainTaskBuildInput[] {
     if (!isPipelineKind(p)) continue
     const id = typeof o.id === 'string' && o.id.trim() ? o.id.trim() : `main_${p}_${i}`
     const title = typeof o.title === 'string' ? o.title.trim() : undefined
+
+    const testSteps = p === 'test' ? parseTestSteps(o.testSteps) : undefined
+
     const sub = Array.isArray(o.subTasks) ? o.subTasks : undefined
     const kinds = expectedSubTaskKinds(p)
     let titles: [string, string, string] | undefined
-    if (sub && sub.length === 3) {
+    if (p !== 'test' && sub && sub.length === 3) {
       const ok = sub.every((s, j) => String(s?.kind ?? '').trim() === kinds[j])
       if (ok) {
         titles = [
@@ -110,7 +142,14 @@ function normalizeLlmMainTasks(raw: unknown[]): MainTaskBuildInput[] {
         ] as [string, string, string]
       }
     }
-    out.push({ id, title, pipeline: p, subTaskTitles: titles })
+
+    out.push({
+      id,
+      title,
+      pipeline: p,
+      subTaskTitles: titles,
+      testSteps: testSteps && testSteps.length > 0 ? testSteps : undefined,
+    })
     i++
   }
   return out
@@ -153,10 +192,154 @@ function parseTitlesForPipeline(
   return [pick(0, d0), pick(1, d1), pick(2, d2)]
 }
 
-/**
- * 将主任务草稿展开为带依赖的 `TaskPlanMain[]`：每段 parse → 中段 agent → report；
- * 下一段 parse 依赖上一段 report，保证每段前重新拉取最新 HTML。
- */
+function stepCacheSuffix(mainId: string, stepIndex: number, kind: 'html_dsl' | 'code'): string {
+  return `${mainId}_step${stepIndex}_${kind}`
+}
+
+/** test 主任务：多段 testSteps → 每段 parse+testCode(片段) → merge → report */
+function buildTestMainWithSteps(
+  mainId: string,
+  mainTitle: string,
+  pageUrl: string,
+  stepTitles: string[],
+  prevTailId: string | undefined,
+): TaskPlanMain {
+  const subTasks: TaskPlanStep[] = []
+  let lastDep = prevTailId
+
+  for (let i = 0; i < stepTitles.length; i++) {
+    const parseId = `${mainId}_step${i}_parse`
+    const testId = `${mainId}_step${i}_test`
+    const htmlDslKey = `${pageUrl}::${stepCacheSuffix(mainId, i, 'html_dsl')}`
+    const codeKey = `${pageUrl}::${stepCacheSuffix(mainId, i, 'code')}`
+
+    subTasks.push({
+      id: parseId,
+      title: `解析 HTML（步骤 ${i + 1}/${stepTitles.length}：${stepTitles[i]})`,
+      type: 'parseHtml',
+      assignTo: 'parseHtmlAgent',
+      dependencies: lastDep ? [lastDep] : [],
+      canParallel: false,
+      status: 'pending',
+      cacheKey: htmlDslKey,
+      groupId: mainId,
+      testStepIndex: i,
+    })
+
+    subTasks.push({
+      id: testId,
+      title: stepTitles[i],
+      type: 'testCode',
+      assignTo: 'testCodeAgent',
+      dependencies: [parseId],
+      canParallel: false,
+      status: 'pending',
+      cacheKey: codeKey,
+      groupId: mainId,
+      testStepIndex: i,
+      testStepRole: 'fragment',
+    })
+
+    lastDep = testId
+  }
+
+  const mergeId = `${mainId}_merge`
+  const fragmentIds = stepTitles.map((_, i) => `${mainId}_step${i}_test`)
+  subTasks.push({
+    id: mergeId,
+    title: `合并 ${stepTitles.length} 段测试用例为单个 spec`,
+    type: 'testCode',
+    assignTo: 'testCodeAgent',
+    dependencies: fragmentIds,
+    canParallel: false,
+    status: 'pending',
+    cacheKey: `${pageUrl}::${mainId}_merged_spec`,
+    groupId: mainId,
+    testStepRole: 'merge',
+  })
+
+  const reportId = `${mainId}_report`
+  subTasks.push({
+    id: reportId,
+    title: `生成测试阶段 HTML 报告`,
+    type: 'report',
+    assignTo: 'reportAgent',
+    dependencies: [mergeId],
+    canParallel: false,
+    status: 'pending',
+    cacheKey: `${pageUrl}::${mainId}_report`,
+    groupId: mainId,
+    reportTypes: ['test'],
+  })
+
+  return {
+    id: mainId,
+    title: mainTitle,
+    pipeline: 'test',
+    subTasks,
+  }
+}
+
+/** seo/perf 或单段 test：parse → exec → report */
+function buildSimpleMainTask(
+  inp: MainTaskBuildInput,
+  pageUrl: string,
+  intent: string,
+  prevTailId: string | undefined,
+): { main: TaskPlanMain; tailId: string } {
+  const { pipeline } = inp
+  const mainId = inp.id?.trim() || `main_${pipeline}`
+  const mainTitle = inp.title?.trim() || defaultMainTitle(pipeline, intent)
+  const [tParse, tExec, tReport] = parseTitlesForPipeline(pipeline, intent, inp.subTaskTitles)
+
+  const parseId = `${mainId}_parse`
+  const execId = `${mainId}_exec`
+  const reportId = `${mainId}_report`
+  const mid = MID_STEP[pipeline]
+
+  const subTasks: TaskPlanStep[] = [
+    {
+      id: parseId,
+      title: tParse,
+      type: 'parseHtml',
+      assignTo: 'parseHtmlAgent',
+      dependencies: prevTailId ? [prevTailId] : [],
+      canParallel: false,
+      status: 'pending',
+      cacheKey: `${pageUrl}_parse_${pipeline}_${intent.slice(0, 24)}`,
+      groupId: mainId,
+    },
+    {
+      id: execId,
+      title: tExec,
+      type: mid.type,
+      assignTo: mid.assignTo,
+      dependencies: [parseId],
+      canParallel: false,
+      status: 'pending',
+      cacheKey: `${pageUrl}_${pipeline}_exec_${intent.slice(0, 24)}`,
+      groupId: mainId,
+    },
+    {
+      id: reportId,
+      title: tReport,
+      type: 'report',
+      assignTo: 'reportAgent',
+      dependencies: [execId],
+      canParallel: false,
+      status: 'pending',
+      cacheKey: `${pageUrl}_report_${pipeline}_${intent.slice(0, 24)}`,
+      groupId: mainId,
+      reportTypes: [mid.reportType],
+    },
+  ]
+
+  return {
+    main: { id: mainId, title: mainTitle, pipeline, subTasks },
+    tailId: reportId,
+  }
+}
+
 function buildMainTasks(pageUrl: string, userInput: string, inputs: MainTaskBuildInput[]): TaskPlanMain[] {
   const intent = userInput.replace(/\r?\n/g, ' ').trim().slice(0, 40)
   const mains: TaskPlanMain[] = []
@@ -167,54 +350,24 @@ function buildMainTasks(pageUrl: string, userInput: string, inputs: MainTaskBuil
     const { pipeline } = inp
     const mainId = inp.id?.trim() || `main_${pipeline}_${idx}`
     const mainTitle = inp.title?.trim() || defaultMainTitle(pipeline, intent)
-    const [tParse, tExec, tReport] = parseTitlesForPipeline(pipeline, intent, inp.subTaskTitles)
 
-    const parseId = `${mainId}_parse`
-    const execId = `${mainId}_exec`
-    const reportId = `${mainId}_report`
-    const mid = MID_STEP[pipeline]
+    if (pipeline === 'test') {
+      const steps =
+        inp.testSteps && inp.testSteps.length > 0
+          ? inp.testSteps
+          : defaultTestStepTitles(userInput, intent)
 
-    const subTasks: TaskPlanStep[] = [
-      {
-        id: parseId,
-        title: tParse,
-        type: 'parseHtml',
-        assignTo: 'parseHtmlAgent',
-        dependencies: prevTailId ? [prevTailId] : [],
-        canParallel: false,
-        status: 'pending',
-        cacheKey: `${pageUrl}_parse_${pipeline}_${intent.slice(0, 24)}`,
-      },
-      {
-        id: execId,
-        title: tExec,
-        type: mid.type,
-        assignTo: mid.assignTo,
-        dependencies: [parseId],
-        canParallel: false,
-        status: 'pending',
-        cacheKey: `${pageUrl}_${pipeline}_exec_${intent.slice(0, 24)}`,
-      },
-      {
-        id: reportId,
-        title: tReport,
-        type: 'report',
-        assignTo: 'reportAgent',
-        dependencies: [execId],
-        canParallel: false,
-        status: 'pending',
-        cacheKey: `${pageUrl}_report_${pipeline}_${intent.slice(0, 24)}`,
-        reportTypes: [mid.reportType],
-      },
-    ]
+      if (steps.length >= 2) {
+        const main = buildTestMainWithSteps(mainId, mainTitle, pageUrl, steps, prevTailId)
+        mains.push(main)
+        prevTailId = `${mainId}_report`
+        continue
+      }
+    }
 
-    mains.push({
-      id: mainId,
-      title: mainTitle,
-      pipeline,
-      subTasks,
-    })
-    prevTailId = reportId
+    const { main, tailId } = buildSimpleMainTask(inp, pageUrl, intent, prevTailId)
+    mains.push(main)
+    prevTailId = tailId
   }
 
   return mains
@@ -264,7 +417,7 @@ export async function planAgentNode(state: State) {
         timestamp: Date.now(),
       },
       agentObservation('planAgent', 'done', {
-        summary: `主任务 ${tasks.length} 个（流水线 ${pipelineSummary}）；每主任务内子任务顺序：解析 → 执行 → 报告`,
+        summary: `主任务 ${tasks.length} 个（流水线 ${pipelineSummary}）；test 含多步时将按步骤缓存 html/dsl 并合并测试代码`,
         data: {
           mainTasks: tasks.map((m) => ({
             id: m.id,
@@ -275,6 +428,9 @@ export async function planAgentNode(state: State) {
               title: s.title,
               assignTo: s.assignTo,
               type: s.type,
+              testStepRole: s.testStepRole,
+              testStepIndex: s.testStepIndex,
+              cacheKey: s.cacheKey,
               reportTypes: s.reportTypes,
             })),
           })),

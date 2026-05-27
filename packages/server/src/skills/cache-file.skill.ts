@@ -16,8 +16,17 @@ export const cacheFileSkill: SkillDefinition = {
     if (kind === 'html_snapshot') {
       const pageUrl = String(input['pageUrl'] ?? ctx.state.pageUrl ?? '').trim()
       const html = String(input['html'] ?? '')
-      if (!pageUrl || !html.trim()) {
-        return { ok: false, error: '缺少 pageUrl 或 html' }
+      const cacheKey = String(input['cacheKey'] ?? '').trim()
+      if (!html.trim()) {
+        return { ok: false, error: '缺少 html' }
+      }
+      if (cacheKey) {
+        const rel = fileCacheService.htmlRelativePathFromCacheKey(cacheKey)
+        await invokeWriteTool(ctx.agentName, ctx.emit, rel, html)
+        return { ok: true, kind, relativePath: rel, cacheKey }
+      }
+      if (!pageUrl) {
+        return { ok: false, error: '缺少 pageUrl 或 cacheKey' }
       }
       const rel = path.join('html', fileCacheService.htmlFilenameFromPageUrl(pageUrl))
       await invokeWriteTool(ctx.agentName, ctx.emit, rel, html)

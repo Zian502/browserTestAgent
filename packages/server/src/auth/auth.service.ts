@@ -69,7 +69,7 @@ export class AuthService {
     const q = new URLSearchParams({
       client_id: this.githubClientId,
       redirect_uri: this.githubCallbackUrl,
-      scope: 'read:user user:email',
+      scope: 'read:user user:email repo',
       state,
     })
     return `https://github.com/login/oauth/authorize?${q}`

@@ -109,7 +109,10 @@ export function LoginPage() {
           {loading ? '正在跳转 GitHub…' : '使用 GitHub 登录'}
         </button>
         {error ? <p style={errorText}>{error}</p> : null}
-        <p style={hint}>本地开发需在服务端配置 GITHUB_CLIENT_ID、GITHUB_CLIENT_SECRET 与 JWT_SECRET。</p>
+        <p style={hint}>
+          本地开发需在服务端配置 GITHUB_CLIENT_ID、GITHUB_CLIENT_SECRET 与 JWT_SECRET。登录后将授权创建/写入{' '}
+          <code style={{ fontSize: 12 }}>playwright-test-code</code> 仓库以保存测试用例；若此前已登录，请退出后重新授权。
+        </p>
       </div>
     </div>
   )

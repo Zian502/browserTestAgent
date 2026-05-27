@@ -4,13 +4,13 @@ import {
   useLocalRuntime,
   type ChatModelAdapter,
   type ChatModelRunResult,
+  type ThreadMessageLike,
 } from '@assistant-ui/react'
 import { useTaskStore } from './stores/task-store'
 import { getPageContextForAgent, isAcceptablePageUrl, isExtensionRuntime } from '../lib/page-context'
 import { resolveLatestUserInput } from '../lib/user-intent-url'
 import { AGENT_API_BASE } from './agent-api-base'
 import { authFetch } from './auth/auth-api'
-import { ChatHistoryHydration } from './chat-history-hydration'
 
 function agentLabel(name?: string) {
   const map: Record<string, string> = {
@@ -316,14 +316,15 @@ function createAdapter(): ChatModelAdapter {
   }
 }
 
-export function AgentRuntimeProvider({ children }: { children: ReactNode }) {
+export function AgentRuntimeProvider({
+  children,
+  initialMessages = [],
+}: {
+  children: ReactNode
+  initialMessages?: readonly ThreadMessageLike[]
+}) {
   const adapter = useMemo(() => createAdapter(), [])
-  const runtime = useLocalRuntime(adapter)
+  const runtime = useLocalRuntime(adapter, { initialMessages })
 
-  return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <ChatHistoryHydration />
-      {children}
-    </AssistantRuntimeProvider>
-  )
+  return <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
 }

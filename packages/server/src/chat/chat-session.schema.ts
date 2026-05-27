@@ -8,6 +8,10 @@ export class ChatSession {
   @Prop({ required: true, unique: true })
   sessionId!: string
 
+  /** GitHub 用户 id；未登录时为 undefined */
+  @Prop({ index: true })
+  userId?: string
+
   /** 摘要标题，通常取最近一次用户输入前若干字 */
   @Prop()
   title?: string
@@ -20,4 +24,5 @@ export class ChatSession {
 }
 
 export const ChatSessionSchema = SchemaFactory.createForClass(ChatSession)
+ChatSessionSchema.index({ userId: 1, updatedAt: -1 })
 ChatSessionSchema.index({ updatedAt: -1 })

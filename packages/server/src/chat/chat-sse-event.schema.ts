@@ -9,6 +9,10 @@ export class ChatSseEvent {
   @Prop({ required: true, index: true })
   sessionId!: string
 
+  /** GitHub 用户 id；未登录时为 undefined */
+  @Prop({ index: true })
+  userId?: string
+
   @Prop({ required: true, index: true })
   threadId!: string
 

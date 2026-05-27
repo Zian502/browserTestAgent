@@ -1,5 +1,5 @@
 import type { PageDSL, State, StreamEvent } from './state'
-import { createChatLlm, hasChatLlm } from './llm-client'
+import { invokeChatLlm, hasChatLlm } from './llm-client'
 import { extractJsonObject, extractMessageText } from './llm-text'
 import { findTaskId, updateStatus, findStepByTaskId } from './graph-helpers'
 import {
@@ -174,12 +174,16 @@ async function persistHtmlSnapshot(
   pageUrl: string,
   pageHtml: string,
   skillCtx: SkillRunContext,
+  cacheKey?: string,
 ): Promise<void> {
-  await runSkill('cache-file', skillCtx, {
+  const payload: Record<string, string> = {
     kind: 'html_snapshot',
     pageUrl,
     html: pageHtml,
-  })
+  }
+  const key = cacheKey?.trim()
+  if (key) payload.cacheKey = key
+  await runSkill('cache-file', skillCtx, payload)
 }
 
 function compressedSourceForLlm(compressedSkillOut: Record<string, unknown>, pageHtml: string): string {
@@ -189,11 +193,13 @@ function compressedSourceForLlm(compressedSkillOut: Record<string, unknown>, pag
 
 async function dslFromLlmSingle(sourceForLlm: string, pageUrl: string, pageHtmlForFallback: string): Promise<PageDSL | null> {
   if (!sourceForLlm.trim() || !hasChatLlm()) return null
-  const model = createChatLlm({ temperature: 0 })
-  const response = await model.invoke([
-    { role: 'system', content: PARSE_HTML_DSL_SYSTEM_PROMPT },
-    { role: 'user', content: buildParseHtmlUserMessage(sourceForLlm, pageUrl) },
-  ])
+  const response = await invokeChatLlm(
+    [
+      { role: 'system', content: PARSE_HTML_DSL_SYSTEM_PROMPT },
+      { role: 'user', content: buildParseHtmlUserMessage(sourceForLlm, pageUrl) },
+    ],
+    { temperature: 0 },
+  )
   try {
     const parsed = extractJsonObject<PageDSL>(extractMessageText(response.content))
     return normalizePageDsl(parsed, pageUrl, pageHtmlForFallback)
@@ -212,7 +218,6 @@ async function dslFromLlmChunked(
   const chunks = splitCompressedHtmlIntoChunks(sourceForLlm, maxChunkChars)
   const chunkCount = chunks.length
   if (chunkCount === 0) return { dsl: null, chunkCount: 0 }
-  const model = createChatLlm({ temperature: 0 })
   const totalChars = sourceForLlm.length
 
   const firstWrapped = wrapCompressedHtmlWithChunkMarkers(
@@ -226,10 +231,13 @@ async function dslFromLlmChunked(
   const firstSystem = `${PARSE_HTML_DSL_SYSTEM_PROMPT}${PARSE_HTML_DSL_MULTI_FIRST_APPEND}`
   let acc: PageDSL
   try {
-    const r0 = await model.invoke([
-      { role: 'system', content: firstSystem },
-      { role: 'user', content: buildParseHtmlMultiFirstUserMessage(pageUrl, firstWrapped) },
-    ])
+    const r0 = await invokeChatLlm(
+      [
+        { role: 'system', content: firstSystem },
+        { role: 'user', content: buildParseHtmlMultiFirstUserMessage(pageUrl, firstWrapped) },
+      ],
+      { temperature: 0 },
+    )
     const parsed0 = extractJsonObject<PageDSL>(extractMessageText(r0.content))
     acc = normalizePageDsl(parsed0, pageUrl, pageHtmlForFallback)
   } catch {
@@ -255,10 +263,13 @@ async function dslFromLlmChunked(
       existingJson,
     )
     try {
-      const ri = await model.invoke([
-        { role: 'system', content: PARSE_HTML_DSL_CONTINUATION_SYSTEM_PROMPT },
-        { role: 'user', content: userMsg },
-      ])
+      const ri = await invokeChatLlm(
+        [
+          { role: 'system', content: PARSE_HTML_DSL_CONTINUATION_SYSTEM_PROMPT },
+          { role: 'user', content: userMsg },
+        ],
+        { temperature: 0 },
+      )
       const delta = parseContinuationDelta(extractMessageText(ri.content))
       acc = mergePageDslFragments(acc, delta)
     } catch {
@@ -316,7 +327,7 @@ export async function parseHtmlAgentNode(state: State) {
   const skillCtx = { state, agentName: 'parseHtmlAgent' as const, taskId, emit }
 
   const pageHtml = await resolvePageHtml(state, skillCtx)
-  await persistHtmlSnapshot(state.pageUrl, pageHtml, skillCtx)
+  await persistHtmlSnapshot(state.pageUrl, pageHtml, skillCtx, task?.cacheKey)
 
   const compressed = await runSkill('compress-html', skillCtx, { html: pageHtml })
   const sourceForLlm = compressedSourceForLlm(compressed, pageHtml)

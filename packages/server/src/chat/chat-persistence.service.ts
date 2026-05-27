@@ -10,6 +10,12 @@ function clipTitle(s: string, max = 120): string {
   return t.length <= max ? t : `${t.slice(0, max)}…`
 }
 
+function sessionQuery(sessionId: string, userId?: string): Record<string, string> {
+  const q: Record<string, string> = { sessionId }
+  if (userId) q.userId = userId
+  return q
+}
+
 @Injectable()
 export class ChatPersistenceService {
   private readonly log = new Logger(ChatPersistenceService.name)
@@ -25,13 +31,16 @@ export class ChatPersistenceService {
     threadId: string
     userInput: string
     pageUrl: string
+    userId?: string
   }): Promise<void> {
     try {
       const title = clipTitle(params.userInput)
       await this.sessions.findOneAndUpdate(
-        { sessionId: params.sessionId },
+        sessionQuery(params.sessionId, params.userId),
         {
           $set: {
+            sessionId: params.sessionId,
+            userId: params.userId,
             title,
             lastPageUrl: params.pageUrl,
             lastThreadId: params.threadId,
@@ -41,6 +50,7 @@ export class ChatPersistenceService {
       )
       await this.messages.create({
         sessionId: params.sessionId,
+        userId: params.userId,
         threadId: params.threadId,
         role: 'user',
         content: params.userInput,
@@ -56,12 +66,14 @@ export class ChatPersistenceService {
     sessionId: string
     threadId: string
     data: Record<string, unknown>
+    userId?: string
   }): Promise<void> {
     try {
       const ev = params.data['event']
       const eventType = typeof ev === 'string' ? ev : ''
       await this.sseEvents.create({
         sessionId: params.sessionId,
+        userId: params.userId,
         threadId: params.threadId,
         eventType,
         payload: params.data,
@@ -75,26 +87,27 @@ export class ChatPersistenceService {
     sessionId: string
     threadId: string
     content: string
+    userId?: string
   }): Promise<void> {
     const body = params.content.trim()
     if (!body) return
     try {
       await this.messages.create({
         sessionId: params.sessionId,
+        userId: params.userId,
         threadId: params.threadId,
         role: 'assistant',
         content: body,
       })
-      await this.sessions.updateOne(
-        { sessionId: params.sessionId },
-        { $set: { lastThreadId: params.threadId } },
-      )
+      await this.sessions.updateOne(sessionQuery(params.sessionId, params.userId), {
+        $set: { lastThreadId: params.threadId },
+      })
     } catch (e) {
       this.log.warn(`recordAssistantTurn failed: ${String(e)}`)
     }
   }
 
-  async listSessions(limit = 50): Promise<
+  async listSessions(userId?: string, limit = 50): Promise<
     Array<{
       sessionId: string
       title?: string
@@ -104,8 +117,9 @@ export class ChatPersistenceService {
       updatedAt?: Date
     }>
   > {
+    const query = userId ? { userId } : {}
     const rows = await this.sessions
-      .find()
+      .find(query)
       .sort({ updatedAt: -1 })
       .limit(limit)
       .lean()
@@ -123,7 +137,7 @@ export class ChatPersistenceService {
     })
   }
 
-  async listMessages(sessionId: string, limit = 300): Promise<
+  async listMessages(sessionId: string, limit = 300, _userId?: string): Promise<
     Array<{
       threadId: string
       role: 'user' | 'assistant'

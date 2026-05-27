@@ -8,6 +8,10 @@ export class ChatMessage {
   @Prop({ required: true, index: true })
   sessionId!: string
 
+  /** GitHub 用户 id；未登录时为 undefined */
+  @Prop({ index: true })
+  userId?: string
+
   /** 单次 agent/run 对应 LangGraph thread */
   @Prop({ required: true, index: true })
   threadId!: string
@@ -23,4 +27,5 @@ export class ChatMessage {
 }
 
 export const ChatMessageSchema = SchemaFactory.createForClass(ChatMessage)
+ChatMessageSchema.index({ userId: 1, sessionId: 1, createdAt: 1 })
 ChatMessageSchema.index({ sessionId: 1, createdAt: 1 })

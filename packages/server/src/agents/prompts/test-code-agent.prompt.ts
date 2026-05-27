@@ -6,13 +6,19 @@ export const TEST_CODE_AGENT_SYSTEM_PROMPT =
   ' **凡涉及账号、密码、登录表单（含「用账号登录」「输入用户名密码」等）时，默认必须使用 `testEnv.TEST_USERNAME` 与 `testEnv.TEST_PASSWORD`**，禁止在源码中硬编码邮箱、手机号、密码。' +
   ' 其他敏感配置只通过 `testEnv.键名` 读取，勿用 `process.env`，勿硬编码 token。' +
   ' **Selector 与可点击/可输入**：当本步操作要求元素处于**可点、可填、可聚焦**（即可交互）时，若 DSL 中该元素的 `selector` 含有禁用态片段，生成代码前**必须过滤或改写**，不得原样用于 `click` / `dblclick` / `hover` / `fill` / `focus`。常见需剥离片段：`.disabled`、`.is-disabled`、`[disabled]`、`:disabled`、`[aria-disabled="true"]`、`[data-disabled="true"]` 及链式选择器里等价的禁用后缀。做法示例：去掉上述片段后保留基础定位；或 `page.getByRole(...)`；或 `locator.filter({ hasNot: ... })` / `.and(locator.locator(":not(:disabled)"))` 等指向**启用态**节点。若用例目的是断言控件**应保持禁用**，则保留含禁用的 selector，仅做 `toBeDisabled()` / `toHaveAttribute("aria-disabled","true")` 等，**禁止**对其 `click`/`fill`。' +
+  ' **登录结果断言（重要）**：提交后优先基于 **DSL 中实际存在的元素** 或页面文案断言——例如登录弹层 `not.toBeVisible()`、出现「退出/个人中心/账户」等 `getByText`、或表单内错误提示 `toBeVisible()`。**禁止**臆造 `.user-avatar`、`.header-user` 等未在 DSL 出现的通用 class。**禁止**用 `page.waitForTimeout` 代替 `expect` 等待。若无法可靠断言登录成功，至少断言：提交后无可见错误提示，或登录弹层已关闭。' +
   ' 同文件内 `test` 按执行顺序从上到下排列；必要时用 `test.describe` 分组（可选）。'
+
+/** 单步子任务：只输出一条 test */
+export const TEST_CODE_FRAGMENT_SYSTEM_PROMPT =
+  TEST_CODE_AGENT_SYSTEM_PROMPT +
+  ' **本请求为测试流水线中的一个片段**：只输出 **一条** `test("…", async ({ page }) => { … })` 及必要 `import`；**禁止** `test.describe`；**禁止**输出多条 `test`。**每条片段必须能单独在同一已打开页签上执行**：若依赖前序 UI（如登录弹框），片段开头先检测该状态；不可见时须在本片段内重复必要前置操作（如再次点击登录入口），不得假设前序 `test` 已执行。'
 
 export function buildTestCodeUserMessage(
   userInput: string,
   dslJson: string,
   pageUrl: string,
-  opts?: { reuseOpenPage?: boolean },
+  opts?: { reuseOpenPage?: boolean; stepTitle?: string },
 ): string {
   const reuse = opts?.reuseOpenPage
     ? '\n注意：服务端已在真实浏览器中打开目标 URL，**同一页签**将执行本段测试；除非需要强制刷新，否则不要调用 `page.goto`。'
@@ -23,5 +29,35 @@ export function buildTestCodeUserMessage(
     '\n用例拆分：按功能点输出**多个** `test(...)`（例如登录拆成「点击登录入口 + 断言弹层」与「填账号密码并提交 + 断言结果」两条），每条命名能反映步骤含义。'
   const selectorHint =
     '\nSelector：凡要对元素 **click/fill/hover/focus**（要求可交互）时，若 DSL 的 `selector` 含 `.disabled`、`.is-disabled`、`:disabled`、`[disabled]`、`aria-disabled` 等禁用片段，须在代码里**过滤掉或改写**后再定位；**禁止**原样用于交互。仅当断言「应禁用」时才保留这些片段。'
-  return `用户需求：${userInput}\n页面 DSL：${dslJson}\n目标 URL：${pageUrl}${reuse}${envHint}${splitHint}${selectorHint}\n只输出完整代码。`
+  const stepScope = opts?.stepTitle?.trim()
+    ? `\n\n**本片段职责（仅实现这一条，不要实现其它步骤）**：${opts.stepTitle}`
+    : ''
+  return `用户需求：${userInput}\n页面 DSL：${dslJson}\n目标 URL：${pageUrl}${reuse}${envHint}${splitHint}${selectorHint}${stepScope}\n只输出完整代码。`
+}
+
+export function buildTestCodeFragmentUserMessage(
+  stepTitle: string,
+  userInput: string,
+  dslJson: string,
+  pageUrl: string,
+  opts?: {
+    reuseOpenPage?: boolean
+    stepIndex?: number
+    totalSteps?: number
+    priorStepTitles?: string[]
+  },
+): string {
+  const base = buildTestCodeUserMessage(userInput, dslJson, pageUrl, { ...opts, stepTitle })
+  const idx = opts?.stepIndex ?? 0
+  const total = opts?.totalSteps ?? 1
+  const prior = opts?.priorStepTitles?.filter(Boolean) ?? []
+  const serialHint =
+    total > 1
+      ? `\n\n**多步流水线上下文**：本片段为第 ${idx + 1}/${total} 步。服务端会在**同一 page** 上按顺序执行各段 test 体；合并后也会按序执行。` +
+        (prior.length > 0
+          ? ` 前序步骤：${prior.map((t, i) => `${i + 1}. ${t}`).join('；')}。`
+          : '') +
+        ' **本片段仍须可单独执行**：若本步依赖的 UI 不可见，须在本片段开头自行完成前置操作（例如再次点击登录入口并等待弹层）。'
+      : ''
+  return `${base}${serialHint}\n\n只输出 **一条** \`test(...)\` 及必要 import，不要 describe，不要多条 test。`
 }

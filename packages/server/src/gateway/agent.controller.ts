@@ -2,21 +2,24 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Post,
   Query,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common'
-import { AuthGuard } from '../auth/auth.guard'
+import { AuthGuard, type AuthenticatedRequest } from '../auth/auth.guard'
 import type { Response } from 'express'
 import { buildGraph } from '../agents/graph'
 import { BrowserTestState } from '../agents/state'
 import { isAcceptablePageUrl } from '../lib/page-url'
 import { disposePlaywrightSession } from '../lib/playwright-browser-session'
 import type { State, StreamEvent } from '../agents/state'
-import { DEFAULT_CHAT_SESSION_ID } from '../chat/constants'
+import { DEFAULT_CHAT_SESSION_ID, chatSessionIdForUser } from '../chat/constants'
+import { formatSseDataForAssistantContent } from '../chat/sse-display-text'
 import { ChatPersistenceService } from '../chat/chat-persistence.service'
 import { executeCoreTool, PLAYWRIGHT_TOOL } from '../tools'
 import { executeReadTool } from '../tools/read'
@@ -47,6 +50,11 @@ export class AgentController {
   private graph = buildGraph()
 
   constructor(private readonly chatPersistence: ChatPersistenceService) {}
+
+  private resolveChatContext(req: AuthenticatedRequest): { userId?: string; sessionId: string } {
+    const userId = req.user?.id?.trim() || undefined
+    return { userId, sessionId: chatSessionIdForUser(userId) }
+  }
 
   /**
    * 读取 `.agent-cache` 下已生成的报告 HTML（供扩展新标签页展示）。
@@ -94,35 +102,44 @@ export class AgentController {
     return out
   }
 
-  /** 会话列表（MongoDB `chat_sessions`）。 */
+  /** 会话列表（MongoDB `chat_sessions`），仅返回当前登录用户的会话。 */
   @Get('agent/chat/sessions')
-  async listChatSessions() {
-    const sessions = await this.chatPersistence.listSessions()
+  async listChatSessions(@Req() req: AuthenticatedRequest) {
+    const { userId } = this.resolveChatContext(req)
+    const sessions = await this.chatPersistence.listSessions(userId)
     return { sessions }
   }
 
   /**
    * 历史对话消息列表（MongoDB `chat_messages`）。
-   * `sessionId` 省略时使用服务端默认会话；`limit` 默认 300、最大 500。
+   * 已登录时按 JWT 用户 id 解析 sessionId；`limit` 默认 300、最大 500。
    */
   @Get('agent/chat/messages')
   async listChatMessagesQuery(
+    @Req() req: AuthenticatedRequest,
     @Query('sessionId') sessionId?: string,
     @Query('limit') limitRaw?: string,
   ) {
-    const sid = String(sessionId ?? '').trim() || DEFAULT_CHAT_SESSION_ID
+    const ctx = this.resolveChatContext(req)
+    const sid = ctx.userId
+      ? ctx.sessionId
+      : String(sessionId ?? '').trim() || DEFAULT_CHAT_SESSION_ID
     const lim = parseInt(String(limitRaw ?? '300'), 10)
     const limit = Number.isFinite(lim) ? Math.min(500, Math.max(1, lim)) : 300
-    const messages = await this.chatPersistence.listMessages(sid, limit)
+    const messages = await this.chatPersistence.listMessages(sid, limit, ctx.userId)
     return { sessionId: sid, messages }
   }
 
   /** 某会话下的历史消息（MongoDB `chat_messages`），路径参数版。 */
   @Get('agent/chat/sessions/:sessionId/messages')
-  async listChatMessages(@Param('sessionId') sessionId: string) {
+  async listChatMessages(@Req() req: AuthenticatedRequest, @Param('sessionId') sessionId: string) {
+    const ctx = this.resolveChatContext(req)
     const sid = String(sessionId ?? '').trim()
     if (!sid) throw new BadRequestException('缺少 sessionId')
-    const messages = await this.chatPersistence.listMessages(sid)
+    if (ctx.userId && sid !== ctx.sessionId) {
+      throw new ForbiddenException('无权访问该会话')
+    }
+    const messages = await this.chatPersistence.listMessages(sid, 300, ctx.userId)
     return { sessionId: sid, messages }
   }
 
@@ -137,6 +154,7 @@ export class AgentController {
       headless?: boolean
       slowMoMs?: number
     },
+    @Req() req: AuthenticatedRequest,
     @Res() res: Response,
   ) {
     res.setHeader('Content-Type', 'text/event-stream')
@@ -145,20 +163,22 @@ export class AgentController {
     ;(res as Response & { flushHeaders?: () => void }).flushHeaders?.()
 
     const threadId = `thread_${Date.now()}`
-    const chatSessionId = DEFAULT_CHAT_SESSION_ID
+    const { userId, sessionId: chatSessionId } = this.resolveChatContext(req)
 
+    let assistantTextBuf = ''
     const send = (obj: Record<string, unknown>) => {
+      assistantTextBuf += formatSseDataForAssistantContent(obj)
       void this.chatPersistence
         .appendSseEvent({
           sessionId: chatSessionId,
           threadId,
+          userId,
           data: obj,
         })
         .catch(() => {})
       res.write(`data: ${JSON.stringify(obj)}\n\n`)
     }
 
-    let assistantTextBuf = ''
     try {
       const pageUrl = (body.pageUrl ?? '').trim()
       const usePw = Boolean(body.usePlaywright)
@@ -197,6 +217,7 @@ export class AgentController {
 
       const input = {
         userInput: body.userInput,
+        userId,
         pageUrl,
         runnerSessionId: '',
         usePlaywrightBrowser: usePw,
@@ -209,6 +230,7 @@ export class AgentController {
         threadId,
         userInput: body.userInput ?? '',
         pageUrl,
+        userId,
       })
 
       const stream = await this.graph.stream(input, {
@@ -218,10 +240,6 @@ export class AgentController {
       for await (const ev of stream) {
         const events = extractStreamEventsFromGraphStreamChunk(ev)
         for (const e of events) {
-          if (e.type === 'text') {
-            const pl = e.payload as { content?: unknown } | undefined
-            if (typeof pl?.content === 'string' && pl.content) assistantTextBuf += pl.content
-          }
           send({ event: e.type, ...e })
         }
       }
@@ -240,6 +258,7 @@ export class AgentController {
           sessionId: chatSessionId,
           threadId,
           content: assistantTextBuf,
+          userId,
         })
         .catch(() => {})
       res.write('data: [DONE]\n\n')

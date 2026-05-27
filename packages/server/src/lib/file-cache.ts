@@ -11,6 +11,7 @@ class FileCacheService {
     await agentFileMkdirp(path.join(this.cacheDir, 'html'))
     await agentFileMkdirp(path.join(this.cacheDir, 'dsl'))
     await agentFileMkdirp(path.join(this.cacheDir, 'testCode'))
+    await agentFileMkdirp(path.join(this.cacheDir, 'testCode', 'fragments'))
   }
 
   htmlFilenameFromPageUrl(pageUrl: string): string {
@@ -54,6 +55,19 @@ class FileCacheService {
     } catch {
       return null
     }
+  }
+
+  htmlRelativePathFromCacheKey(cacheKey: string): string {
+    const id = this.artifactIdFromKey(cacheKey.trim())
+    return path.join('html', `${id}.html`)
+  }
+
+  async writeHtmlSnapshotByCacheKey(cacheKey: string, html: string): Promise<string | null> {
+    const key = cacheKey.trim()
+    if (!key || !html?.trim()) return null
+    await agentFileMkdirp(path.join(this.cacheDir, 'html'))
+    const rel = this.htmlRelativePathFromCacheKey(key)
+    return this.writeFile(rel, html)
   }
 
   artifactIdFromKey(key: string): string {

@@ -68,6 +68,23 @@ export class UserService {
     return doc ? this.toAuthUser(doc) : null
   }
 
+  async getGithubCredentials(githubId: string): Promise<{ token: string; login: string } | null> {
+    const id = githubId.trim()
+    if (!id) return null
+    const doc = await this.users.findOne({ githubId: id }).select('githubAccessToken login').exec()
+    const token = doc?.githubAccessToken?.trim()
+    const login = doc?.login?.trim()
+    if (!token || !login) return null
+    return { token, login }
+  }
+
+  async savePlaywrightTestRepoFullName(githubId: string, repoFullName: string): Promise<void> {
+    const id = githubId.trim()
+    const name = repoFullName.trim()
+    if (!id || !name) return
+    await this.users.updateOne({ githubId: id }, { $set: { playwrightTestRepoFullName: name } }).exec()
+  }
+
   private toAuthUser(doc: UserDocument): AuthUser {
     return {
       id: doc.githubId,

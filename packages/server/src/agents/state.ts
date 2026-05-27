@@ -17,6 +17,18 @@ export type AgentName =
 /** 单个子任务：对应一次 agent 执行，全局 id 在 flatten 后仍唯一 */
 export type TaskPlanStepType = 'parseHtml' | 'testCode' | 'seo' | 'pagespeed' | 'report'
 
+/** test 流水线：子任务测试代码角色 */
+export type TestStepRole = 'fragment' | 'merge'
+
+export interface TestCodeFragment {
+  taskId: string
+  stepIndex: number
+  title: string
+  code: string
+  cacheKey: string
+  dslCacheKey?: string
+}
+
 export interface TaskPlanStep {
   id: string
   title: string
@@ -26,6 +38,12 @@ export interface TaskPlanStep {
   canParallel: boolean
   status: 'pending' | 'running' | 'done' | 'failed' | 'skipped'
   cacheKey?: string
+  /** 所属主任务 id（test 多段拆分时的分组键） */
+  groupId?: string
+  /** test 流水线内步骤序号（从 0 起） */
+  testStepIndex?: number
+  /** testCode 子任务：片段生成或最终合并 */
+  testStepRole?: TestStepRole
   /**
    * 仅当 assignTo 为 reportAgent：本段只生成这些类型的 HTML 报告
    */
@@ -101,6 +119,8 @@ export const BrowserTestState = Annotation.Root({
     default: () => [],
   }),
   userInput: Annotation<string>(),
+  /** GitHub 用户 id（JWT sub）；未登录时为空 */
+  userId: Annotation<string | undefined>(),
   pageUrl: Annotation<string>(),
   /** Playwright 托管会话 id（与 CDP 打开的页签对应）；空表示未启用 */
   runnerSessionId: Annotation<string>(),
@@ -127,6 +147,19 @@ export const BrowserTestState = Annotation.Root({
   }),
   reports: Annotation<Record<string, string>>({
     reducer: (prev, next) => ({ ...prev, ...next }),
+    default: () => ({}),
+  }),
+  /** 按主任务 id 累积各 test 片段代码，供 merge 子任务串联 */
+  testCodeFragments: Annotation<Record<string, TestCodeFragment[]>>({
+    reducer: (prev, next) => {
+      const out = { ...prev }
+      for (const [mainId, frags] of Object.entries(next)) {
+        const byIndex = new Map((out[mainId] ?? []).map((f) => [f.stepIndex, f]))
+        for (const f of frags) byIndex.set(f.stepIndex, f)
+        out[mainId] = [...byIndex.values()].sort((a, b) => a.stepIndex - b.stepIndex)
+      }
+      return out
+    },
     default: () => ({}),
   }),
 })
