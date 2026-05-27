@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common'
 import { randomBytes } from 'node:crypto'
 import type { AuthUser } from './auth.types'
 import { signAccessToken, verifyAccessToken } from './jwt'
+import { UserService } from './user.service'
 
 type PendingOAuth = {
   finalRedirect: string
@@ -14,6 +15,8 @@ const ACCESS_TOKEN_TTL_SEC = 7 * 24 * 60 * 60
 @Injectable()
 export class AuthService {
   private readonly pendingOAuth = new Map<string, PendingOAuth>()
+
+  constructor(private readonly userService: UserService) {}
 
   isEnabled(): boolean {
     return Boolean(this.githubClientId && this.githubClientSecret && this.jwtSecret)
@@ -122,12 +125,28 @@ export class AuthService {
       throw new UnauthorizedException('GitHub 用户信息不完整')
     }
 
-    return {
+    const profile: AuthUser = {
       id,
       login,
       name: gh.name != null ? String(gh.name) : undefined,
       avatarUrl: gh.avatar_url != null ? String(gh.avatar_url) : undefined,
     }
+
+    return this.userService.upsertFromGithub(profile, accessToken)
+  }
+
+  async logout(bearerToken: string): Promise<void> {
+    const user = this.verifyBearerToken(bearerToken)
+    await this.userService.revokeGithubAuthorization(user.id, {
+      clientId: this.githubClientId,
+      clientSecret: this.githubClientSecret,
+    })
+  }
+
+  async resolveUserFromToken(token: string): Promise<AuthUser> {
+    const claims = this.verifyBearerToken(token)
+    const stored = await this.userService.findByGithubId(claims.id)
+    return stored ?? claims
   }
 
   issueAccessToken(user: AuthUser): string {

@@ -8,12 +8,15 @@ import {
   type ReactNode,
 } from 'react'
 import { AGENT_API_BASE } from '../agent-api-base'
-import { fetchAuthConfig, loginWithGithub as startGithubLogin, setUnauthorizedHandler } from './auth-api'
+import { fetchAuthConfig, logoutAuthSession, setUnauthorizedHandler, startGithubLogin } from './auth-api'
 import {
   clearAccessTokenFromLocationHash,
+  clearAllAuthCache,
   clearAuthSession,
   getStoredAccessToken,
+  getStoredUser,
   parseAccessTokenFromLocationHash,
+  resetToLoginPage,
   saveAuthSession,
   type AuthUser,
 } from './auth-storage'
@@ -61,6 +64,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return
     }
 
+    const cachedUser = await getStoredUser()
+    if (cachedUser) {
+      setUser(cachedUser)
+    }
+
     const me = await fetchMeWithToken(token)
     if (!me.authenticated || !me.user) {
       await clearAuthSession()
@@ -83,23 +91,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [hydrateFromServer])
 
   const login = useCallback(async () => {
-    const { token, user: nextUser } = await startGithubLogin()
-    await saveAuthSession(token, nextUser)
-    setUser(nextUser)
-    setStatus('authenticated')
+    startGithubLogin()
   }, [])
 
   const logout = useCallback(async () => {
-    await clearAuthSession()
-    setUser(null)
-    setStatus('guest')
+    await logoutAuthSession()
   }, [])
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
-      void clearAuthSession().then(() => {
-        setUser(null)
-        setStatus('guest')
+      void clearAllAuthCache().then(() => {
+        resetToLoginPage()
       })
     })
     return () => setUnauthorizedHandler(null)

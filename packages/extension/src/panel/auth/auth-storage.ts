@@ -95,6 +95,21 @@ export async function clearAuthSession(): Promise<void> {
   await storageRemove([TOKEN_KEY, USER_KEY])
 }
 
+/** 清除本地登录缓存（storage + URL hash） */
+export async function clearAllAuthCache(): Promise<void> {
+  await clearAuthSession()
+  clearAccessTokenFromLocationHash()
+}
+
+/** 面板根地址，OAuth 回调与退出后重置均回到此页 */
+export function getPanelBaseUrl(): string {
+  return getGithubOAuthFinalRedirect()
+}
+
+export function resetToLoginPage(): void {
+  window.location.replace(getPanelBaseUrl())
+}
+
 export function parseAccessTokenFromRedirectUrl(redirectUrl: string): string | null {
   try {
     const url = new URL(redirectUrl)
@@ -121,11 +136,16 @@ export function clearAccessTokenFromLocationHash(): void {
 }
 
 export function getGithubOAuthFinalRedirect(): string {
-  if (typeof chrome !== 'undefined' && chrome.identity?.getRedirectURL) {
-    return chrome.identity.getRedirectURL()
+  if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
+    return chrome.runtime.getURL('popup.html')
   }
   if (typeof window !== 'undefined') {
     return `${window.location.origin}${window.location.pathname}`
   }
   return 'http://localhost:5175/'
+}
+
+export function resolveGithubAvatarUrl(user: AuthUser): string {
+  if (user.avatarUrl) return user.avatarUrl
+  return `https://avatars.githubusercontent.com/u/${encodeURIComponent(user.id)}?s=64`
 }

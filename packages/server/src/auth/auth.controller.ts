@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Req, Res, UnauthorizedException } from '@nestjs/common'
+import { Controller, Get, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common'
 import type { Request, Response } from 'express'
 import { AuthService } from './auth.service'
 import type { AuthenticatedRequest } from './auth.guard'
@@ -24,7 +24,7 @@ export class AuthController {
   }
 
   @Get('me')
-  getMe(@Req() req: AuthenticatedRequest) {
+  async getMe(@Req() req: AuthenticatedRequest) {
     if (!this.authService.isEnabled()) {
       return { authenticated: false, authRequired: false, user: null }
     }
@@ -35,11 +35,31 @@ export class AuthController {
     }
 
     try {
-      const user = this.authService.verifyBearerToken(token)
+      const user = await this.authService.resolveUserFromToken(token)
       return { authenticated: true, authRequired: true, user }
     } catch {
       return { authenticated: false, authRequired: true, user: null }
     }
+  }
+
+  @Post('logout')
+  async logout(@Req() req: AuthenticatedRequest) {
+    if (!this.authService.isEnabled()) {
+      return { ok: true }
+    }
+
+    const token = extractBearerToken(req)
+    if (!token) {
+      return { ok: true }
+    }
+
+    try {
+      await this.authService.logout(token)
+    } catch {
+      // 令牌无效时仍允许客户端清理本地状态
+    }
+
+    return { ok: true }
   }
 
   @Get('github/start')
@@ -60,8 +80,9 @@ export class AuthController {
       throw new UnauthorizedException('finalRedirect 无效')
     }
 
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new UnauthorizedException('finalRedirect 必须是 http(s) 地址')
+    const allowedProtocols = new Set(['http:', 'https:', 'chrome-extension:'])
+    if (!allowedProtocols.has(parsed.protocol)) {
+      throw new UnauthorizedException('finalRedirect 必须是 http(s) 或 chrome-extension 地址')
     }
 
     const state = this.authService.createOAuthState(finalRedirect)

@@ -1,7 +1,11 @@
 import { ChatOpenAI } from '@langchain/openai'
 
+/** DeepSeek V4 官方模型 ID（OpenAI 兼容 Chat Completions） */
+export const DEEPSEEK_V4_PRO_MODEL = 'deepseek-v4-pro'
+export const DEEPSEEK_V4_FLASH_MODEL = 'deepseek-v4-flash'
+
 /**
- * 所有 Agent LLM 走 OpenAI 兼容协议，默认接入 **DeepSeek**（api.deepseek.com）。
+ * 所有 Agent LLM 走 OpenAI 兼容协议，默认接入 **DeepSeek V4 Pro**（api.deepseek.com）。
  * 密钥优先级：LLM_API_KEY（总覆盖）> DEEPSEEK_API_KEY > CODEANY_API_KEY > OPENAI_API_KEY
  */
 export function llmApiKey(): string {
@@ -24,13 +28,13 @@ export function llmBaseUrl(): string {
   return raw.replace(/\/$/, '')
 }
 
-/** 模型名：LLM_MODEL > DEEPSEEK_MODEL > CODEANY_MODEL，默认 deepseek-chat */
+/** 模型名：LLM_MODEL > DEEPSEEK_MODEL > CODEANY_MODEL，默认 deepseek-v4-pro */
 export function llmModel(): string {
   return (
     process.env.LLM_MODEL?.trim() ||
     process.env.DEEPSEEK_MODEL?.trim() ||
     process.env.CODEANY_MODEL?.trim() ||
-    'deepseek-chat'
+    DEEPSEEK_V4_PRO_MODEL
   )
 }
 
