@@ -1,6 +1,7 @@
 import { useMemo, useState, type CSSProperties } from 'react'
 import { useTaskStore, type AgentObservationLogEntry } from '../stores/task-store'
 import { AGENT_API_BASE } from '../agent-api-base'
+import { authFetch } from '../auth/auth-api'
 import { MarkdownFromStaticText } from './MarkdownFromStaticText'
 import { RunTestCodeModal, type RunTestCodeModalParams } from './RunTestCodeModal'
 
@@ -279,7 +280,7 @@ function reportEntriesFromCard(card: MergedInvocationCard): { type: string; path
 async function fetchReportHtmlAndOpenTab(relativePath: string): Promise<void> {
   const url = new URL('/api/agent/report-html', AGENT_API_BASE)
   url.searchParams.set('path', relativePath)
-  const res = await fetch(url.toString())
+  const res = await authFetch(url.toString())
   if (!res.ok) {
     const errText = await res.text().catch(() => '')
     throw new Error(errText || `${res.status} ${res.statusText}`)

@@ -9,6 +9,7 @@ import { useTaskStore } from './stores/task-store'
 import { getPageContextForAgent, isAcceptablePageUrl, isExtensionRuntime } from '../lib/page-context'
 import { resolveLatestUserInput } from '../lib/user-intent-url'
 import { AGENT_API_BASE } from './agent-api-base'
+import { authFetch } from './auth/auth-api'
 import { ChatHistoryHydration } from './chat-history-hydration'
 
 function agentLabel(name?: string) {
@@ -69,7 +70,7 @@ function createAdapter(): ChatModelAdapter {
           return
         }
 
-        const response = await fetch(`${AGENT_API_BASE}/api/agent/run`, {
+        const response = await authFetch(`${AGENT_API_BASE}/api/agent/run`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -83,6 +84,10 @@ function createAdapter(): ChatModelAdapter {
         })
 
         if (!response.ok || !response.body) {
+          if (response.status === 401) {
+            yield* bump('登录已失效，请重新登录。\n')
+            return
+          }
           yield* bump(`❌ 请求失败：${response.status}\n`)
           return
         }

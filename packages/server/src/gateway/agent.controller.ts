@@ -1,4 +1,15 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query, Res } from '@nestjs/common'
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common'
+import { AuthGuard } from '../auth/auth.guard'
 import type { Response } from 'express'
 import { buildGraph } from '../agents/graph'
 import { BrowserTestState } from '../agents/state'
@@ -31,6 +42,7 @@ function extractStreamEventsFromGraphStreamChunk(chunk: unknown): StreamEvent[] 
 }
 
 @Controller('api')
+@UseGuards(AuthGuard)
 export class AgentController {
   private graph = buildGraph()
 

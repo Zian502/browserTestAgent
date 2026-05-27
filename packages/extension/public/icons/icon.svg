@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- Background: rounded browser window shape -->
+  <rect x="8" y="8" width="112" height="112" rx="24" fill="#0F172A"/>
+  <rect x="8" y="8" width="112" height="112" rx="24" stroke="#3B82F6" stroke-width="3"/>
+
+  <!-- Browser tab bar -->
+  <rect x="18" y="18" width="92" height="14" rx="4" fill="#1E293B"/>
+  <!-- Tab dots (traffic lights) -->
+  <circle cx="28" cy="25" r="3" fill="#EF4444"/>
+  <circle cx="38" cy="25" r="3" fill="#F59E0B"/>
+  <circle cx="48" cy="25" r="3" fill="#22C55E"/>
+  <!-- URL bar -->
+  <rect x="58" y="22" width="44" height="6" rx="3" fill="#334155"/>
+
+  <!-- Robot head -->
+  <rect x="36" y="44" width="56" height="42" rx="10" fill="#3B82F6"/>
+  <rect x="36" y="44" width="56" height="42" rx="10" stroke="#60A5FA" stroke-width="1.5"/>
+
+  <!-- Robot antenna -->
+  <line x1="64" y1="36" x2="64" y2="44" stroke="#60A5FA" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="64" cy="34" r="4" fill="#A78BFA" stroke="#C4B5FD" stroke-width="1"/>
+
+  <!-- Robot eyes — glowing AI style -->
+  <circle cx="52" cy="59" r="7" fill="#0F172A"/>
+  <circle cx="76" cy="59" r="7" fill="#0F172A"/>
+  <!-- Eye glow -->
+  <circle cx="52" cy="59" r="5" fill="#22D3EE"/>
+  <circle cx="76" cy="59" r="5" fill="#22D3EE"/>
+  <!-- Eye highlights -->
+  <circle cx="54" cy="57" r="2" fill="#FFFFFF" opacity="0.8"/>
+  <circle cx="78" cy="57" r="2" fill="#FFFFFF" opacity="0.8"/>
+
+  <!-- Robot mouth — smile -->
+  <path d="M54 74 Q64 82 74 74" stroke="#0F172A" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+
+  <!-- Robot ears / side sensors -->
+  <rect x="28" y="56" width="8" height="10" rx="3" fill="#2563EB"/>
+  <rect x="92" y="56" width="8" height="10" rx="3" fill="#2563EB"/>
+
+  <!-- AI sparkle / neural nodes — left -->
+  <g transform="translate(22, 48)">
+    <line x1="0" y1="-5" x2="0" y2="5" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="-5" y1="0" x2="5" y2="0" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="-3.5" y1="-3.5" x2="3.5" y2="3.5" stroke="#A78BFA" stroke-width="1" stroke-linecap="round"/>
+    <line x1="3.5" y1="-3.5" x2="-3.5" y2="3.5" stroke="#A78BFA" stroke-width="1" stroke-linecap="round"/>
+  </g>
+  <!-- AI sparkle / neural nodes — right -->
+  <g transform="translate(106, 48)">
+    <line x1="0" y1="-5" x2="0" y2="5" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="-5" y1="0" x2="5" y2="0" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="-3.5" y1="-3.5" x2="3.5" y2="3.5" stroke="#A78BFA" stroke-width="1" stroke-linecap="round"/>
+    <line x1="3.5" y1="-3.5" x2="-3.5" y2="3.5" stroke="#A78BFA" stroke-width="1" stroke-linecap="round"/>
+  </g>
+
+  <!-- Code brackets "</>" as vector paths at bottom -->
+  <!-- "<" left bracket -->
+  <path d="M48 98 L40 103 L48 108" stroke="#60A5FA" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- "/" slash -->
+  <path d="M59 96 L69 110" stroke="#60A5FA" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <!-- ">" right bracket -->
+  <path d="M80 98 L88 103 L80 108" stroke="#60A5FA" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- Neural connection lines from robot to sparkles -->
+  <line x1="36" y1="54" x2="28" y2="48" stroke="#A78BFA" stroke-width="1" opacity="0.5" stroke-dasharray="2 2"/>
+  <line x1="92" y1="54" x2="100" y2="48" stroke="#A78BFA" stroke-width="1" opacity="0.5" stroke-dasharray="2 2"/>
+</svg>

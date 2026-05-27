@@ -3,6 +3,7 @@ import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
 import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { AGENT_API_BASE } from '../agent-api-base'
+import { authFetch } from '../auth/auth-api'
 
 SyntaxHighlighter.registerLanguage('typescript', typescript)
 
@@ -257,7 +258,7 @@ export function RunTestCodeModal(props: {
     setRunning(true)
     setResultText(null)
     try {
-      const res = await fetch(`${AGENT_API_BASE}/api/agent/run-test-code`, {
+      const res = await authFetch(`${AGENT_API_BASE}/api/agent/run-test-code`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
