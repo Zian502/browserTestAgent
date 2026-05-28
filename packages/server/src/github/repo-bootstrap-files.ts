@@ -20,43 +20,71 @@ on:
       - 'scripts/**'
       - 'playwright.config.ts'
       - 'package.json'
+      - 'package-lock.json'
       - '.browser-test-agent.json'
       - '.github/workflows/**'
   pull_request:
+    branches: [main, master]
     paths:
       - 'tests/**'
+      - 'scripts/**'
+      - 'playwright.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.browser-test-agent.json'
+      - '.github/workflows/**'
   workflow_dispatch:
     inputs:
       base_url:
         description: '目标页面 URL（覆盖 Secrets / .browser-test-agent.json）'
         required: false
+        type: string
+
+concurrency:
+  group: playwright-\${{ github.workflow }}-\${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
+    name: Run Playwright specs
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci || npm install
 
-      - name: Install Playwright browsers
+      - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run Playwright specs
+      - name: Run Playwright tests
         env:
           BASE_URL: \${{ inputs.base_url || secrets.BASE_URL }}
           TEST_USERNAME: \${{ secrets.TEST_USERNAME }}
           TEST_PASSWORD: \${{ secrets.TEST_PASSWORD }}
           RUN_TEST_ENV_KEYS: \${{ secrets.RUN_TEST_ENV_KEYS }}
+          TEST_TIMEOUT_MS: '120000'
           CI: 'true'
         run: npm test
+
+      - name: Upload runner logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-ci-logs-\${{ github.run_id }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
 `,
   },
   {
