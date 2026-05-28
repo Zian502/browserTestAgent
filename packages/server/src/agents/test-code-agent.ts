@@ -214,7 +214,24 @@ function parseTestRunOutput(out: Record<string, unknown>): ParsedTestRun {
   }
 }
 
-/** 持久化 spec 并上传到 GitHub（与测试通过/失败无关，每次生成都上传） */
+function shouldUploadSpecToGithub(run: ParsedTestRun): boolean {
+  if (!run.skillOk) return false
+  if (run.failed > 0) return false
+  if (run.passed <= 0) return false
+  return true
+}
+
+function githubOutcomeWhenSkippedUpload(run: ParsedTestRun): GithubUploadOutcome {
+  if (!run.skillOk) {
+    return { ok: false, skipped: true, reason: '测试执行失败，未上传 GitHub' }
+  }
+  if (run.failed > 0) {
+    return { ok: false, skipped: true, reason: `测试存在 ${run.failed} 条失败，未上传 GitHub` }
+  }
+  return { ok: false, skipped: true, reason: '无通过用例，未上传 GitHub' }
+}
+
+/** 持久化 spec；仅当全部用例通过时才上传到 GitHub */
 async function persistAndUploadFinalSpec(
   userId: string | undefined,
   state: State,
@@ -222,9 +239,7 @@ async function persistAndUploadFinalSpec(
     cacheKey: string
     code: string
     taskTitle?: string
-    passed: number
-    failed: number
-    skipped?: boolean
+    run: ParsedTestRun
   },
 ): Promise<{
   persisted: { tsRelative: string; manifestRelative: string; specSlug: string }
@@ -236,11 +251,13 @@ async function persistAndUploadFinalSpec(
     taskTitle: opts.taskTitle,
     pageUrl: state.pageUrl,
     code: opts.code,
-    passed: opts.passed,
-    failed: opts.failed,
-    skipped: opts.skipped,
+    passed: opts.run.passed,
+    failed: opts.run.failed,
+    skipped: opts.run.skipped,
   })
-  const githubOutcome = await uploadPersistedSpecToGithub(userId, state, persisted, opts.code, opts.taskTitle)
+  const githubOutcome = shouldUploadSpecToGithub(opts.run)
+    ? await uploadPersistedSpecToGithub(userId, state, persisted, opts.code, opts.taskTitle)
+    : githubOutcomeWhenSkippedUpload(opts.run)
   return { persisted, githubOutcome }
 }
 
@@ -277,9 +294,7 @@ export async function testCodeAgentNode(state: State, config?: LangGraphRunnable
       cacheKey: persistKey,
       code: sanitizedCode,
       taskTitle: task?.title ?? `合并测试：${groupId}`,
-      passed: run.passed,
-      failed: run.failed,
-      skipped: run.skipped,
+      run,
     })
     const githubSummary = githubOutcome ? githubUploadSummary(githubOutcome) : undefined
     const ghUploadEvent = githubUploadStreamEvent(githubOutcome, taskId)
@@ -497,9 +512,7 @@ export async function testCodeAgentNode(state: State, config?: LangGraphRunnable
     cacheKey: persistKey,
     code,
     taskTitle: task?.title,
-    passed: run.passed,
-    failed: run.failed,
-    skipped: run.skipped,
+    run,
   })
   const githubSummary = githubOutcome ? githubUploadSummary(githubOutcome) : undefined
   const ghUploadEvent = githubUploadStreamEvent(githubOutcome, taskId)

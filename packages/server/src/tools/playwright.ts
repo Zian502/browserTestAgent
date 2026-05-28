@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import type { Page } from 'playwright'
 import {
+  attachHeldSessionForTargetUrl,
   createHeldSessionBlankPage,
   disposePlaywrightSession,
   openPageAndCaptureHtmlViaCDP,
   getPlaywrightSessionPage,
+  isPlaywrightCdpAttachActive,
   refreshSessionPageHtmlViaCDP,
   type PlaywrightSessionLaunchOptions,
 } from '../lib/playwright-browser-session'
@@ -143,11 +145,13 @@ export async function executePlaywrightCoreTool(input: PlaywrightCoreInput): Pro
     let disposeTemporarySession = !rawSid
     let page: Page
 
+    const targetUrl = rt.targetUrl.trim()
+    const attachOnly = await isPlaywrightCdpAttachActive()
+
     async function gotoTargetOrFail(): Promise<PlaywrightCoreResult | null> {
-      const url = rt.targetUrl.trim()
-      if (!url) return null
+      if (!targetUrl || attachOnly) return null
       try {
-        await page.goto(url, {
+        await page.goto(targetUrl, {
           waitUntil: 'domcontentloaded',
           timeout: rt.timeoutMs ?? 90_000,
         })
@@ -158,21 +162,34 @@ export async function executePlaywrightCoreTool(input: PlaywrightCoreInput): Pro
       }
     }
 
-    if (!rawSid) {
-      page = await createHeldSessionBlankPage(sid, {})
-      const early = await gotoTargetOrFail()
-      if (early) return early
-    } else {
-      const held = getPlaywrightSessionPage(sid)
-      if (held) {
-        page = held
-      } else {
-        disposeTemporarySession = true
-        page = await createHeldSessionBlankPage(sid, {})
-        const early = await gotoTargetOrFail()
-        if (early) return early
+    async function resolvePageForRunTest(): Promise<Page> {
+      if (attachOnly) {
+        if (!targetUrl) {
+          throw new Error('挂接模式下 run_test 需要 targetUrl 以匹配已有页签')
+        }
+        const held = getPlaywrightSessionPage(sid)
+        if (held) return held
+        return attachHeldSessionForTargetUrl(sid, targetUrl, {
+          navigationTimeoutMs: rt.timeoutMs ?? 90_000,
+        })
       }
+      if (!rawSid) {
+        const p = await createHeldSessionBlankPage(sid, { pageUrl: targetUrl })
+        return p
+      }
+      const held = getPlaywrightSessionPage(sid)
+      if (held) return held
+      disposeTemporarySession = true
+      return createHeldSessionBlankPage(sid, { pageUrl: targetUrl })
     }
+
+    try {
+      page = await resolvePageForRunTest()
+    } catch (e) {
+      return { op: 'run_test', ok: false, error: String(e), durationMs: Date.now() - t0 }
+    }
+    const early = await gotoTargetOrFail()
+    if (early) return early
 
     try {
       const testResult = await playwrightRunner.execute({

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common'
+import * as path from 'path'
 import { UserService } from '../auth/user.service'
 import { REPO_BOOTSTRAP_FILES } from './repo-bootstrap-files'
 
@@ -50,6 +51,50 @@ export class GithubTestRepoService {
     }
 
     return result
+  }
+
+  /** 从用户测试仓库删除已上传的 spec（需文件已存在） */
+  async deleteTestSpecForUser(
+    githubId: string,
+    fileName: string,
+    commitMessage?: string,
+  ): Promise<{ repoFullName: string; filePath: string; deleted: boolean }> {
+    const creds = await this.userService.getGithubCredentials(githubId)
+    if (!creds) {
+      throw new Error('未找到 GitHub 访问令牌，请重新登录以授权仓库写入')
+    }
+
+    const repoFullName = `${creds.login}/${this.defaultRepoName}`
+    const filePath = `tests/${fileName.replace(/^[/\\]+/, '')}`
+
+    const getUrl = this.contentsUrl(repoFullName, filePath)
+    const existing = await fetch(getUrl, { headers: this.githubHeaders(creds.token) })
+    if (existing.status === 404) {
+      return { repoFullName, filePath, deleted: false }
+    }
+    if (!existing.ok) {
+      const body = await existing.text().catch(() => '')
+      throw new Error(`读取 GitHub 文件失败（${existing.status}）${body ? `: ${body.slice(0, 200)}` : ''}`)
+    }
+
+    const json = (await existing.json()) as { sha?: string }
+    const sha = json.sha
+    if (!sha) throw new Error(`无法获取 ${filePath} 的 sha`)
+
+    const del = await fetch(getUrl, {
+      method: 'DELETE',
+      headers: this.githubHeaders(creds.token),
+      body: JSON.stringify({
+        message: commitMessage ?? `Remove Playwright test: ${path.basename(filePath)}`,
+        sha,
+      }),
+    })
+    if (!del.ok) {
+      const body = await del.text().catch(() => '')
+      throw new Error(`删除 GitHub 文件 \`${filePath}\` 失败（${del.status}）${body ? `: ${body.slice(0, 200)}` : ''}`)
+    }
+
+    return { repoFullName, filePath, deleted: true }
   }
 
   private githubHeaders(token: string, extra?: Record<string, string>): Record<string, string> {

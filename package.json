@@ -6,6 +6,7 @@
     "dev:server": "pnpm --filter @browser-test-agent/server start:dev",
     "dev:extension": "pnpm --filter @browser-test-agent/extension dev",
     "dev:web": "pnpm --filter @browser-test-agent/extension dev:web",
+    "chrome:cdp": "pnpm --filter @browser-test-agent/server run chrome:cdp",
     "build": "pnpm -r build"
   }
 }

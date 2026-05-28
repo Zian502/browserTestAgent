@@ -1,5 +1,6 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common'
 import { randomBytes } from 'node:crypto'
+import { githubFetch } from '../lib/github-fetch'
 import type { AuthUser } from './auth.types'
 import { signAccessToken, verifyAccessToken } from './jwt'
 import { UserService } from './user.service'
@@ -76,7 +77,7 @@ export class AuthService {
   }
 
   async exchangeGithubCode(code: string): Promise<AuthUser> {
-    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+    const tokenRes = await githubFetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -100,7 +101,7 @@ export class AuthService {
       throw new UnauthorizedException(tokenJson.error || 'GitHub 未返回 access_token')
     }
 
-    const userRes = await fetch('https://api.github.com/user', {
+    const userRes = await githubFetch('https://api.github.com/user', {
       headers: {
         Accept: 'application/vnd.github+json',
         Authorization: `Bearer ${accessToken}`,
@@ -170,6 +171,12 @@ export class AuthService {
   appendTokenToRedirect(finalRedirect: string, accessToken: string): string {
     const url = new URL(finalRedirect)
     url.hash = `access_token=${encodeURIComponent(accessToken)}&token_type=bearer`
+    return url.toString()
+  }
+
+  appendAuthErrorToRedirect(finalRedirect: string, message: string): string {
+    const url = new URL(finalRedirect)
+    url.hash = `auth_error=${encodeURIComponent(message)}`
     return url.toString()
   }
 

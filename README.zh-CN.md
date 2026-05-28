@@ -109,6 +109,19 @@ browserTestAgent/
 | `MONGODB_URI` | MongoDB 连接串（聊天持久化；默认 `mongodb://127.0.0.1:27017/browser-test-agent`） |
 | `PORT` | HTTP 端口 |
 | `PARSE_HTML_LLM_MAX_CHUNK_CHARS` | （可选）PageDSL 解析时每段压缩 HTML 最大字符数，见 [parse-html-dsl-design.md](./docs/parse-html-dsl-design.md) |
+| `PLAYWRIGHT_CDP_URL` / `CHROME_CDP_URL` | （可选）挂接本机已开启远程调试的 Chrome，例如 `http://127.0.0.1:9222`；设置后 capture / run_test 优先使用 URL 匹配的现有页签，且 **不会** 在会话结束时关闭你的浏览器 |
+
+**挂接已有 Chrome（可选）**
+
+```bash
+# 启动带 9222 的 Chrome（默认复用日常配置；若 Chrome 在跑会先退出再重启，通常恢复标签与登录态）
+pnpm chrome:cdp
+
+# .env
+PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222
+```
+
+重启后 Chrome 一般会恢复原有标签；再跑 Agent 即可挂接对应页签。空配置调试：`CHROME_ISOLATED_PROFILE=1 pnpm chrome:cdp`。
 
 ---
 

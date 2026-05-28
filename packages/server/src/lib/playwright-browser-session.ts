@@ -1,4 +1,22 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
+import {
+  findPageForTargetUrl,
+  formatCdpConnectionHelp,
+  getOrConnectCdpBrowser,
+  getPlaywrightCdpEndpoint,
+  isPlaywrightCdpAttachActive,
+  isPlaywrightCdpAttachMode,
+  isPlaywrightCdpFallbackLaunchEnabled,
+  listOpenPageUrls,
+  pageMatchesTargetUrl,
+} from './playwright-cdp-connect'
+
+export {
+  getPlaywrightCdpEndpoint,
+  isPlaywrightCdpAttachMode,
+  isPlaywrightCdpAttachActive,
+  formatCdpConnectionHelp,
+} from './playwright-cdp-connect'
 
 export type PlaywrightSessionLaunchOptions = {
   /** 默认 false：弹出真实窗口便于观察解析与测试过程 */
@@ -17,6 +35,8 @@ type HeldSession = {
   browser: Browser
   context: BrowserContext
   page: Page
+  /** 挂接到用户已打开的 Chrome 时，dispose 不关闭浏览器/上下文 */
+  external?: boolean
 }
 
 const sessions = new Map<string, HeldSession>()
@@ -54,29 +74,133 @@ async function launchChromeLikeBrowser(opts: PlaywrightSessionLaunchOptions): Pr
   }
 }
 
+async function navigatePageIfNeeded(
+  page: Page,
+  pageUrl: string,
+  opts: PlaywrightSessionLaunchOptions,
+): Promise<void> {
+  const url = pageUrl.trim()
+  if (!url) return
+  const navTimeout = opts.navigationTimeoutMs ?? 90_000
+  page.setDefaultNavigationTimeout(navTimeout)
+  if (pageMatchesTargetUrl(page.url(), url)) return
+  await page.goto(url, {
+    waitUntil: opts.waitUntil ?? 'domcontentloaded',
+    timeout: navTimeout,
+  })
+}
+
+/** 挂接模式：仅复用已打开且 URL 匹配的页签，不启动浏览器、不新建页签、不导航 */
+async function acquireBrowserPageAttachOnly(
+  pageUrl: string,
+  opts: PlaywrightSessionLaunchOptions = {},
+): Promise<HeldSession> {
+  const url = pageUrl.trim()
+  if (!url) {
+    throw new Error(
+      '挂接模式下必须提供目标 URL（例如 https://www.bydfi.com/zh），以便匹配你已打开的页签',
+    )
+  }
+  const browser = await getOrConnectCdpBrowser()
+  const page = findPageForTargetUrl(browser, url)
+  if (!page) {
+    const open = listOpenPageUrls(browser)
+    throw new Error(
+      `未在已连接的 Chrome 中找到与 ${url} 匹配的页签。` +
+        `请先在 Chrome 中打开该页面。当前页签：${open.length ? open.join(' | ') : '(无)'}`,
+    )
+  }
+  const navTimeout = opts.navigationTimeoutMs ?? 90_000
+  page.setDefaultNavigationTimeout(navTimeout)
+  await page.bringToFront().catch(() => {})
+  return { browser, context: page.context(), page, external: true }
+}
+
+/**
+ * 取得用于会话的 Browser + Page：
+ * - `PLAYWRIGHT_CDP_URL`：挂接已有 Chrome，仅匹配现有页签；
+ * - 否则启动 Chromium/Chrome 并导航。
+ */
+async function acquireLaunchedBrowserPage(
+  pageUrl: string,
+  opts: PlaywrightSessionLaunchOptions,
+): Promise<HeldSession> {
+  const browser = await launchChromeLikeBrowser(opts)
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+  const page = await context.newPage()
+  await navigatePageIfNeeded(page, pageUrl, opts)
+  return { browser, context, page, external: false }
+}
+
+async function acquireBrowserPage(
+  pageUrl: string,
+  opts: PlaywrightSessionLaunchOptions = {},
+): Promise<HeldSession> {
+  if (isPlaywrightCdpAttachMode()) {
+    const endpoint = getPlaywrightCdpEndpoint()!
+    const active = await isPlaywrightCdpAttachActive()
+    if (active) {
+      const held = await acquireBrowserPageAttachOnly(pageUrl, opts)
+      console.warn(
+        `[playwright] CDP 挂接 ${endpoint}，复用页签: ${held.page.url()}`,
+      )
+      return held
+    }
+    if (isPlaywrightCdpFallbackLaunchEnabled()) {
+      console.warn(
+        `[playwright] ${endpoint} 不可达，PLAYWRIGHT_CDP_FALLBACK=1 → 回退为 Playwright 启动 Chrome`,
+      )
+      return acquireLaunchedBrowserPage(pageUrl, opts)
+    }
+    throw new Error(formatCdpConnectionHelp(endpoint))
+  }
+
+  return acquireLaunchedBrowserPage(pageUrl, opts)
+}
+
+/**
+ * 挂接到目标 URL 对应的**已有页签**并登记会话（不 capture、不 goto）。
+ * 供 `run_test` 在 `PLAYWRIGHT_CDP_URL` 模式下直接在当前 Chrome 页签执行测试。
+ */
+export async function attachHeldSessionForTargetUrl(
+  sessionId: string,
+  pageUrl: string,
+  opts: PlaywrightSessionLaunchOptions = {},
+): Promise<Page> {
+  if (sessions.has(sessionId)) {
+    await disposePlaywrightSession(sessionId)
+  }
+  const held = await acquireBrowserPageAttachOnly(pageUrl, opts)
+  sessions.set(sessionId, held)
+  return held.page
+}
+
 /**
  * 在 `sessions` 中登记空白页会话（不导航 URL），与主流程 CDP 会话同源管理；
  * 供 `run_test` 在省略 `sessionId` 时用临时 id 创建页签，并由 `disposePlaywrightSession` 释放。
  */
 export async function createHeldSessionBlankPage(
   sessionId: string,
-  opts: PlaywrightSessionLaunchOptions = {},
+  opts: PlaywrightSessionLaunchOptions & { pageUrl?: string } = {},
 ): Promise<Page> {
   if (sessions.has(sessionId)) {
     await disposePlaywrightSession(sessionId)
   }
-  const browser = await launchChromeLikeBrowser(opts)
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
-  const page = await context.newPage()
-  const navTimeout = opts.navigationTimeoutMs ?? 90_000
-  page.setDefaultNavigationTimeout(navTimeout)
-  sessions.set(sessionId, { browser, context, page })
-  return page
+  const target = String(opts.pageUrl ?? '').trim()
+  if (await isPlaywrightCdpAttachActive()) {
+    if (!target) {
+      throw new Error('挂接模式下 createHeldSessionBlankPage 需要传入 pageUrl')
+    }
+    return attachHeldSessionForTargetUrl(sessionId, target, opts)
+  }
+  const held = await acquireBrowserPage(target, opts)
+  sessions.set(sessionId, held)
+  return held.page
 }
 
 /**
- * 启动 Chromium/Chrome，导航到 pageUrl，通过 CDP 抓取 HTML，并**保持浏览器与会话**供后续
- * parseHtmlAgent / testCodeAgent 复用同一标签页。
+ * 打开页面并 CDP 抓取 HTML，保持浏览器与会话供后续 agent 复用同一标签页。
+ * 若设置 `PLAYWRIGHT_CDP_URL`，则挂接本机已开启远程调试的 Chrome，优先使用 URL 匹配的现有页签。
  */
 export async function openPageAndCaptureHtmlViaCDP(
   sessionId: string,
@@ -87,24 +211,17 @@ export async function openPageAndCaptureHtmlViaCDP(
     await disposePlaywrightSession(sessionId)
   }
 
-  const browser = await launchChromeLikeBrowser(opts)
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
-  const page = await context.newPage()
-  const navTimeout = opts.navigationTimeoutMs ?? 90_000
-  page.setDefaultNavigationTimeout(navTimeout)
-
+  let held: HeldSession | undefined
   try {
-    await page.goto(pageUrl, {
-      waitUntil: opts.waitUntil ?? 'domcontentloaded',
-      timeout: navTimeout,
-    })
-
-    const html = await getDocumentOuterHtmlViaCDP(page)
-    sessions.set(sessionId, { browser, context, page })
+    held = await acquireBrowserPage(pageUrl, opts)
+    const html = await getDocumentOuterHtmlViaCDP(held.page)
+    sessions.set(sessionId, held)
     return html
   } catch (e) {
-    await context.close().catch(() => {})
-    await browser.close().catch(() => {})
+    if (held && !held.external) {
+      await held.context.close().catch(() => {})
+      await held.browser.close().catch(() => {})
+    }
     throw e
   }
 }
@@ -123,6 +240,7 @@ export async function disposePlaywrightSession(sessionId: string): Promise<void>
   const held = sessions.get(sessionId)
   if (!held) return
   sessions.delete(sessionId)
+  if (held.external) return
   try {
     await held.context.close()
   } catch {

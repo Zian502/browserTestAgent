@@ -107,8 +107,13 @@ export class AuthController {
     }
 
     const finalRedirect = this.authService.consumeOAuthState(state)
-    const user = await this.authService.exchangeGithubCode(code)
-    const accessToken = this.authService.issueAccessToken(user)
-    res.redirect(this.authService.appendTokenToRedirect(finalRedirect, accessToken))
+    try {
+      const user = await this.authService.exchangeGithubCode(code)
+      const accessToken = this.authService.issueAccessToken(user)
+      res.redirect(this.authService.appendTokenToRedirect(finalRedirect, accessToken))
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      res.redirect(this.authService.appendAuthErrorToRedirect(finalRedirect, message))
+    }
   }
 }

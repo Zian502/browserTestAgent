@@ -2,7 +2,19 @@ import { Command } from '@langchain/langgraph'
 import type { State, StreamEvent } from './state'
 import { MISSING_PAGE_CONTEXT_MESSAGE } from './prompts/main-agent.prompt'
 import { fileCacheService } from '../lib/file-cache'
+import { formatCdpConnectionHelp, getPlaywrightCdpEndpoint } from '../lib/playwright-cdp-connect'
 import { runSkill } from '../skills'
+
+function formatPlaywrightCaptureError(raw: string): string {
+  const base =
+    '无法通过 **Playwright + CDP** 获取页面 HTML：\n\n' +
+    `${raw}\n\n` +
+    '请检查本机 Chrome/Chromium、可执行 `pnpm --filter @browser-test-agent/server playwright:install`，并确认页面可达。'
+  if (raw.includes('ECONNREFUSED') && getPlaywrightCdpEndpoint()) {
+    return `${base}\n\n---\n\n${formatCdpConnectionHelp(getPlaywrightCdpEndpoint()!)}`
+  }
+  return base
+}
 
 function isBlank(s: string | undefined): boolean {
   return !s?.trim()
@@ -98,8 +110,7 @@ export async function mainAgentNode(state: State) {
         {
           type: 'text' as const,
           payload: {
-            content:
-              `无法通过 **Playwright + CDP** 获取页面 HTML：\n\n${String(cap['error'] ?? 'unknown')}\n\n请检查本机 Chrome/Chromium、可执行 \`pnpm --filter @browser-test-agent/server playwright:install\`，并确认页面可达。`,
+            content: formatPlaywrightCaptureError(String(cap['error'] ?? 'unknown')),
           },
           timestamp: Date.now(),
         },

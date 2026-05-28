@@ -20,7 +20,7 @@
 
 ---
 
-**Playwright**：服务端 Chromium/CDP；工具在 `packages/server/src/tools/playwright.ts`。首次需在该包执行 `pnpm run playwright:install`。会话与复用逻辑见 `lib/playwright-browser-session.ts`。
+**Playwright**：服务端 Chromium/CDP；工具在 `packages/server/src/tools/playwright.ts`。首次需在该包执行 `pnpm run playwright:install`。会话与复用逻辑见 `lib/playwright-browser-session.ts`。挂接本机 Chrome：`PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222`（Chrome 需 `--remote-debugging-port=9222`），见 `lib/playwright-cdp-connect.ts`。
 
 ---
 
