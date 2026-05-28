@@ -14,6 +14,7 @@ export async function uploadFinalTestCodeToGithub(
     content: string
     specSlug: string
     taskTitle?: string
+    pageUrl?: string
   },
 ): Promise<GithubUploadOutcome> {
   const uid = userId?.trim()
@@ -32,6 +33,7 @@ export async function uploadFinalTestCodeToGithub(
       fileName: opts.fileName,
       content: opts.content,
       commitMessage,
+      pageUrl: opts.pageUrl,
     })
     return { ok: true, result }
   } catch (e) {
@@ -40,7 +42,9 @@ export async function uploadFinalTestCodeToGithub(
 }
 
 export function githubUploadSummary(outcome: GithubUploadOutcome): string | undefined {
-  if ('skipped' in outcome && outcome.skipped) return undefined
+  if ('skipped' in outcome && outcome.skipped) {
+    return `GitHub 未上传（${outcome.reason}）`
+  }
   if (outcome.ok) {
     const action = outcome.result.created ? '已上传' : '已更新'
     return `${action}至 GitHub：${outcome.result.htmlUrl}`
@@ -48,5 +52,13 @@ export function githubUploadSummary(outcome: GithubUploadOutcome): string | unde
   if ('error' in outcome) {
     return `GitHub 上传失败：${outcome.error}`
   }
+  return undefined
+}
+
+export function githubObservationData(outcome: GithubUploadOutcome | undefined): unknown {
+  if (!outcome) return undefined
+  if (outcome.ok) return outcome.result
+  if ('error' in outcome) return { error: outcome.error }
+  if ('skipped' in outcome) return { skipped: true, reason: outcome.reason }
   return undefined
 }

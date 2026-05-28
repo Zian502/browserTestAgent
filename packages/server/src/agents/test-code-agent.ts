@@ -1,6 +1,8 @@
+import type { LangGraphRunnableConfig } from '@langchain/langgraph'
 import type { AgentOutput, State, StreamEvent, TestCodeFragment } from './state'
 import { createChatLlm, hasChatLlm } from './llm-client'
 import { fileCacheService } from '../lib/file-cache'
+import { agentFileReadText } from '../lib/agent-files'
 import { extractMessageText } from './llm-text'
 import { findTaskId, updateStatus, findStepByTaskId } from './graph-helpers'
 import {
@@ -12,13 +14,39 @@ import {
 import { agentObservation } from './agent-observation'
 import { buildRunTestInjectedEnv } from '../lib/run-test-env'
 import { mergeTestCodeFragments } from '../lib/test-code-merge'
+import { sanitizeGeneratedTestCode } from '../lib/sanitize-generated-test-code'
 import { runSkill } from '../skills'
 import * as path from 'path'
 import {
+  githubObservationData,
   githubUploadSummary,
   uploadFinalTestCodeToGithub,
   type GithubUploadOutcome,
 } from '../lib/upload-test-code-github'
+
+function resolveRunUserId(state: State, config?: LangGraphRunnableConfig): string | undefined {
+  const fromCfg = config?.configurable?.userId
+  if (typeof fromCfg === 'string' && fromCfg.trim()) return fromCfg.trim()
+  return state.userId?.trim() || undefined
+}
+
+function githubUploadStreamEvent(outcome: GithubUploadOutcome | undefined, taskId?: string): StreamEvent | null {
+  if (!outcome) return null
+  const summary = githubUploadSummary(outcome)
+  if (!summary) return null
+  return {
+    type: 'agent_observation',
+    agentName: 'testCodeAgent',
+    taskId,
+    payload: {
+      phase: outcome.ok ? 'done' : 'failed',
+      label: 'GitHub 上传',
+      summary,
+      data: githubObservationData(outcome),
+    },
+    timestamp: Date.now(),
+  }
+}
 
 function extractCode(raw: string): string {
   const fence = /^```(?:ts|typescript)?\s*([\s\S]*?)```$/m.exec(raw.trim())
@@ -95,17 +123,19 @@ async function generateTestCode(
           stepIndex: stepCtx?.stepIndex,
           totalSteps: stepCtx?.totalSteps,
           priorStepTitles: stepCtx?.priorStepTitles,
+          dsl,
         })
       : buildTestCodeUserMessage(state.userInput, dslJson, state.pageUrl, {
           reuseOpenPage,
           stepTitle: stepTitle || undefined,
+          dsl,
         })
 
     const fullCodeResp = await model.invoke([
       { role: 'system', content: isFragment ? TEST_CODE_FRAGMENT_SYSTEM_PROMPT : TEST_CODE_AGENT_SYSTEM_PROMPT },
       { role: 'user', content: userContent },
     ])
-    code = rewriteInjectedEnvAccessors(extractCode(extractMessageText(fullCodeResp.content)))
+    code = sanitizeGeneratedTestCode(rewriteInjectedEnvAccessors(extractCode(extractMessageText(fullCodeResp.content))))
   }
 
   return code
@@ -132,21 +162,90 @@ async function runGeneratedTest(
 }
 
 async function uploadPersistedSpecToGithub(
+  userId: string | undefined,
   state: State,
   persisted: { tsRelative: string; specSlug: string },
   code: string,
   taskTitle?: string,
 ): Promise<GithubUploadOutcome | undefined> {
   const fileName = path.basename(persisted.tsRelative)
-  return uploadFinalTestCodeToGithub(state.userId, {
+  let content = code
+  try {
+    const fullPath = path.join(process.cwd(), '.agent-cache', persisted.tsRelative)
+    content = await agentFileReadText(fullPath)
+  } catch {
+    /* 回退为内存中的 code */
+  }
+  return uploadFinalTestCodeToGithub(userId, {
     fileName,
-    content: code,
+    content,
     specSlug: persisted.specSlug,
     taskTitle,
+    pageUrl: state.pageUrl,
   })
 }
 
-export async function testCodeAgentNode(state: State) {
+type ParsedTestRun = {
+  skillOk: boolean
+  passed: number
+  failed: number
+  skipped: boolean
+  logs: string[]
+  error?: string
+}
+
+function parseTestRunOutput(out: Record<string, unknown>): ParsedTestRun {
+  if (out['ok'] !== true) {
+    return {
+      skillOk: false,
+      passed: 0,
+      failed: 1,
+      skipped: false,
+      logs: Array.isArray(out['logs']) ? (out['logs'] as string[]) : [],
+      error: String(out['error'] ?? 'run-test-code 失败'),
+    }
+  }
+  return {
+    skillOk: true,
+    passed: Number(out['passed'] ?? 0),
+    failed: Number(out['failed'] ?? 0),
+    skipped: Boolean(out['skipped']),
+    logs: Array.isArray(out['logs']) ? (out['logs'] as string[]) : [],
+  }
+}
+
+/** 持久化 spec 并上传到 GitHub（与测试通过/失败无关，每次生成都上传） */
+async function persistAndUploadFinalSpec(
+  userId: string | undefined,
+  state: State,
+  opts: {
+    cacheKey: string
+    code: string
+    taskTitle?: string
+    passed: number
+    failed: number
+    skipped?: boolean
+  },
+): Promise<{
+  persisted: { tsRelative: string; manifestRelative: string; specSlug: string }
+  githubOutcome: GithubUploadOutcome | undefined
+}> {
+  const persisted = await fileCacheService.persistTestCodeArtifacts({
+    cacheKey: opts.cacheKey,
+    userInput: state.userInput,
+    taskTitle: opts.taskTitle,
+    pageUrl: state.pageUrl,
+    code: opts.code,
+    passed: opts.passed,
+    failed: opts.failed,
+    skipped: opts.skipped,
+  })
+  const githubOutcome = await uploadPersistedSpecToGithub(userId, state, persisted, opts.code, opts.taskTitle)
+  return { persisted, githubOutcome }
+}
+
+export async function testCodeAgentNode(state: State, config?: LangGraphRunnableConfig) {
+  const runUserId = resolveRunUserId(state, config)
   const taskId = findTaskId(state.taskPlan, 'testCodeAgent')
   const task = taskId ? findStepByTaskId(state.taskPlan, taskId) : undefined
   const cacheKey = task?.cacheKey
@@ -169,16 +268,52 @@ export async function testCodeAgentNode(state: State) {
     }
 
     const code = mergeTestCodeFragments(fragmentCodes)
-    const out = await runGeneratedTest(state, taskId, code, emit, 'merge')
+    const sanitizedCode = sanitizeGeneratedTestCode(code)
+    const out = await runGeneratedTest(state, taskId, sanitizedCode, emit, 'merge')
+    const run = parseTestRunOutput(out as Record<string, unknown>)
 
-    if (out['ok'] !== true) {
-      const err = String(out['error'] ?? 'run-test-code 失败')
+    const persistKey = cacheKey ?? `${state.pageUrl}::${groupId}::merged`
+    const { persisted, githubOutcome } = await persistAndUploadFinalSpec(runUserId, state, {
+      cacheKey: persistKey,
+      code: sanitizedCode,
+      taskTitle: task?.title ?? `合并测试：${groupId}`,
+      passed: run.passed,
+      failed: run.failed,
+      skipped: run.skipped,
+    })
+    const githubSummary = githubOutcome ? githubUploadSummary(githubOutcome) : undefined
+    const ghUploadEvent = githubUploadStreamEvent(githubOutcome, taskId)
+
+    const testResult = {
+      passed: run.passed,
+      failed: run.failed,
+      skipped: run.skipped,
+      logs: run.logs,
+    }
+
+    if (!run.skillOk) {
+      const err = run.error ?? 'run-test-code 失败'
       return {
-        agentOutputs: { testCodeAgent: { status: 'failed', error: err } },
+        agentOutputs: {
+          testCodeAgent: {
+            status: 'failed',
+            error: err,
+            data: { code: sanitizedCode, testResult, merged: true, ...persisted, github: githubOutcome ?? null },
+          },
+        },
         taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'failed') : state.taskPlan,
         streamEvents: [
           ...streamEvents,
-          agentObservation('testCodeAgent', 'failed', { taskId, summary: err, data: { error: err } }),
+          ...(ghUploadEvent ? [ghUploadEvent] : []),
+          agentObservation('testCodeAgent', 'failed', {
+            taskId,
+            summary: [err, githubSummary].filter(Boolean).join('；'),
+            data: {
+              error: err,
+              specRelative: persisted.tsRelative,
+              github: githubObservationData(githubOutcome),
+            },
+          }),
           {
             type: 'agent_failed' as const,
             agentName: 'testCodeAgent' as const,
@@ -190,43 +325,17 @@ export async function testCodeAgentNode(state: State) {
       }
     }
 
-    const testResult = {
-      passed: Number(out['passed'] ?? 0),
-      failed: Number(out['failed'] ?? 0),
-      skipped: Boolean(out['skipped']),
-      logs: Array.isArray(out['logs']) ? (out['logs'] as string[]) : [],
-    }
-
-    const persistKey = cacheKey ?? `${state.pageUrl}::${groupId}::merged`
-    const persisted = await fileCacheService.persistTestCodeArtifacts({
-      cacheKey: persistKey,
-      userInput: state.userInput,
-      taskTitle: task?.title ?? `合并测试：${groupId}`,
-      pageUrl: state.pageUrl,
-      code,
-      passed: testResult.passed,
-      failed: testResult.failed,
-      skipped: testResult.skipped,
-    })
-
-    const githubOutcome = await uploadPersistedSpecToGithub(
-      state,
-      persisted,
-      code,
-      task?.title ?? `合并测试：${groupId}`,
-    )
-    const githubSummary = githubOutcome ? githubUploadSummary(githubOutcome) : undefined
-
     return {
       agentOutputs: {
         testCodeAgent: {
           status: 'done',
-          data: { code, testResult, merged: true, ...persisted, github: githubOutcome ?? null },
+          data: { code: sanitizedCode, testResult, merged: true, ...persisted, github: githubOutcome ?? null },
         },
       },
       taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'done') : state.taskPlan,
       streamEvents: [
         ...streamEvents,
+        ...(ghUploadEvent ? [ghUploadEvent] : []),
         agentObservation('testCodeAgent', 'done', {
           taskId,
           summary: [
@@ -237,16 +346,11 @@ export async function testCodeAgentNode(state: State) {
             .join('；'),
           data: {
             fragmentCount: fragmentCodes.length,
-            codeLength: code.length,
+            codeLength: sanitizedCode.length,
             specRelative: persisted.tsRelative,
             passed: testResult.passed,
             failed: testResult.failed,
-            github:
-              githubOutcome && 'result' in githubOutcome && githubOutcome.ok
-                ? githubOutcome.result
-                : githubOutcome && 'error' in githubOutcome
-                  ? { error: githubOutcome.error }
-                  : undefined,
+            github: githubObservationData(githubOutcome),
           },
         }),
         {
@@ -386,15 +490,50 @@ export async function testCodeAgentNode(state: State) {
   }
 
   const out = await runGeneratedTest(state, taskId, code, emit, task?.testStepRole)
+  const run = parseTestRunOutput(out as Record<string, unknown>)
 
-  if (out['ok'] !== true) {
-    const err = String(out['error'] ?? 'run-test-code 失败')
+  const persistKey = cacheKey ?? `${state.pageUrl}::${state.userInput}::testCode`
+  const { persisted, githubOutcome } = await persistAndUploadFinalSpec(runUserId, state, {
+    cacheKey: persistKey,
+    code,
+    taskTitle: task?.title,
+    passed: run.passed,
+    failed: run.failed,
+    skipped: run.skipped,
+  })
+  const githubSummary = githubOutcome ? githubUploadSummary(githubOutcome) : undefined
+  const ghUploadEvent = githubUploadStreamEvent(githubOutcome, taskId)
+
+  const testResult = {
+    passed: run.passed,
+    failed: run.failed,
+    skipped: run.skipped,
+    logs: run.logs,
+  }
+
+  if (!run.skillOk) {
+    const err = run.error ?? 'run-test-code 失败'
     return {
-      agentOutputs: { testCodeAgent: { status: 'failed', error: err } },
+      agentOutputs: {
+        testCodeAgent: {
+          status: 'failed',
+          error: err,
+          data: { code, testResult, ...persisted, github: githubOutcome ?? null },
+        },
+      },
       taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'failed') : state.taskPlan,
       streamEvents: [
         ...streamEvents,
-        agentObservation('testCodeAgent', 'failed', { taskId, summary: err, data: { error: err } }),
+        ...(ghUploadEvent ? [ghUploadEvent] : []),
+        agentObservation('testCodeAgent', 'failed', {
+          taskId,
+          summary: [err, githubSummary].filter(Boolean).join('；'),
+          data: {
+            error: err,
+            specRelative: persisted.tsRelative,
+            github: githubObservationData(githubOutcome),
+          },
+        }),
         {
           type: 'agent_failed' as const,
           agentName: 'testCodeAgent' as const,
@@ -406,28 +545,6 @@ export async function testCodeAgentNode(state: State) {
     }
   }
 
-  const testResult = {
-    passed: Number(out['passed'] ?? 0),
-    failed: Number(out['failed'] ?? 0),
-    skipped: Boolean(out['skipped']),
-    logs: Array.isArray(out['logs']) ? (out['logs'] as string[]) : [],
-  }
-
-  const persistKey = cacheKey ?? `${state.pageUrl}::${state.userInput}::testCode`
-  const persisted = await fileCacheService.persistTestCodeArtifacts({
-    cacheKey: persistKey,
-    userInput: state.userInput,
-    taskTitle: task?.title,
-    pageUrl: state.pageUrl,
-    code,
-    passed: testResult.passed,
-    failed: testResult.failed,
-    skipped: testResult.skipped,
-  })
-
-  const githubOutcome = await uploadPersistedSpecToGithub(state, persisted, code, task?.title)
-  const githubSummary = githubOutcome ? githubUploadSummary(githubOutcome) : undefined
-
   const doneOutput: AgentOutput = {
     status: 'done',
     data: { code, testResult, ...persisted, github: githubOutcome ?? null },
@@ -438,6 +555,7 @@ export async function testCodeAgentNode(state: State) {
     taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'done') : state.taskPlan,
     streamEvents: [
       ...streamEvents,
+      ...(ghUploadEvent ? [ghUploadEvent] : []),
       agentObservation('testCodeAgent', 'done', {
         taskId,
         summary: [`Playwright：通过 ${testResult.passed}，失败 ${testResult.failed}`, githubSummary]
@@ -449,12 +567,7 @@ export async function testCodeAgentNode(state: State) {
           passed: testResult.passed,
           failed: testResult.failed,
           testResult,
-          github:
-            githubOutcome && 'result' in githubOutcome && githubOutcome.ok
-              ? githubOutcome.result
-              : githubOutcome && 'error' in githubOutcome
-                ? { error: githubOutcome.error }
-                : undefined,
+          github: githubObservationData(githubOutcome),
         },
       }),
       {

@@ -71,19 +71,19 @@ const welcomeBtnDesc: CSSProperties = {
 
 const WELCOME_ITEMS = [
   {
-    title: 'https://www.bydfi.com/zh/moonx/pump 页面的登录',
+    title: 'https://www.bydfi.com/zh 页面的登录',
     description: '解析页面结构，生成 Playwright 测试代码。',
-    prompt: 'https://www.bydfi.com/zh/moonx/pump，找到登录按钮，点击按钮，显示登录弹框后，输入账号和密码，最后点击提交按钮',
+    prompt: 'https://www.bydfi.com/zh，找到登录按钮，点击按钮，显示登录弹框后，输入账号和密码，最后点击提交按钮',
   },
   {
-    title: 'https://www.bydfi.com/zh/moonx/pump 页面的SEO检查',
+    title: 'https://www.bydfi.com/zh 页面的SEO检查',
     description: '分析该页面的 SEO',
-    prompt: 'https://www.bydfi.com/zh/moonx/pump，分析该页面的 SEO',
+    prompt: 'https://www.bydfi.com/zh，分析该页面的 SEO',
   },
   {
-    title: 'https://www.bydfi.com/zh/moonx/pump 页面的性能（PageSpeed）',
+    title: 'https://www.bydfi.com/zh 页面的性能（PageSpeed）',
     description: '分析该页面的性能（PageSpeed）',
-    prompt: 'https://www.bydfi.com/zh/moonx/pump，分析该页面的性能（PageSpeed）',
+    prompt: 'https://www.bydfi.com/zh，分析该页面的性能（PageSpeed）',
   },
 ] as const
 

@@ -13,6 +13,8 @@ import {
 } from './prompts/parse-html-agent.prompt'
 import { agentObservation } from './agent-observation'
 import { fileCacheService } from '../lib/file-cache'
+import { mergeLiveElementsIntoDsl, probeLivePageElements } from '../lib/dsl-live-enrichment'
+import { getPlaywrightSessionPage } from '../lib/playwright-browser-session'
 import { runSkill } from '../skills'
 import type { SkillRunContext } from '../skills/skill-types'
 
@@ -336,7 +338,20 @@ export async function parseHtmlAgentNode(state: State) {
     !sourceForLlm.trim() ? 0 : sourceForLlm.length <= maxChunk ? 1 : splitCompressedHtmlIntoChunks(sourceForLlm, maxChunk).length
 
   const { dsl: fromLlm, llmChunks } = await dslFromLlm(sourceForLlm, state.pageUrl, pageHtml)
-  const dsl: PageDSL = fromLlm ?? minimalDsl(state.pageUrl, pageHtml)
+  let dsl: PageDSL = fromLlm ?? minimalDsl(state.pageUrl, pageHtml)
+
+  const sid = state.runnerSessionId?.trim()
+  if (sid && state.usePlaywrightBrowser) {
+    const page = getPlaywrightSessionPage(sid)
+    if (page) {
+      try {
+        const live = await probeLivePageElements(page)
+        dsl = mergeLiveElementsIntoDsl(dsl, live)
+      } catch {
+        /* 实时探测失败不影响主流程 */
+      }
+    }
+  }
 
   const dslRelativePath = await persistDslSnapshot(dsl, dslCacheKey, state.pageUrl, skillCtx)
 

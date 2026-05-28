@@ -104,8 +104,8 @@ export const playwrightRunner = {
       }
     }
 
-    const totalTimeout = input.timeout ?? 60_000
-    const perTestTimeout = Math.max(15_000, Math.floor(totalTimeout / bodies.length))
+    const totalTimeout = input.timeout ?? 90_000
+    const perTestTimeout = Math.max(30_000, Math.floor(totalTimeout / Math.max(bodies.length, 1)))
     let passed = 0
     let failed = 0
 

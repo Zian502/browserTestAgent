@@ -234,7 +234,7 @@ export class AgentController {
       })
 
       const stream = await this.graph.stream(input, {
-        configurable: { thread_id: threadId },
+        configurable: { thread_id: threadId, userId: userId ?? '' },
         streamMode: 'updates',
       })
       for await (const ev of stream) {

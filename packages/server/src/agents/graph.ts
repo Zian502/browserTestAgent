@@ -1,4 +1,4 @@
-import { StateGraph, START, END, Command, MemorySaver } from '@langchain/langgraph'
+import { StateGraph, START, END, Command, MemorySaver, type LangGraphRunnableConfig } from '@langchain/langgraph'
 import { BrowserTestState, type State, type StreamEvent, type TaskPlanMain, type TaskPlanStep } from './state'
 import { mainAgentNode } from './main-agent'
 import { planAgentNode } from './plan-agent'
@@ -141,7 +141,9 @@ export function buildGraph() {
       ],
     })
     .addNode('parseHtmlAgent', parseHtmlAgentNode, { ends: ['dispatcher'] })
-    .addNode('testCodeAgent', (s: State) => singleAgentNode(s, 'testCodeAgent', testCodeAgentNode), {
+    .addNode('testCodeAgent', (s: State, config: LangGraphRunnableConfig) =>
+      singleAgentNode(s, 'testCodeAgent', (st) => testCodeAgentNode(st, config)),
+    {
       ends: ['dispatcher'],
     })
     .addNode('seoAgent', (s: State) => singleAgentNode(s, 'seoAgent', seoAgentNode), { ends: ['dispatcher'] })
