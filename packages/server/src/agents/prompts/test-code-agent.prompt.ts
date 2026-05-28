@@ -12,7 +12,8 @@ export const TEST_CODE_AGENT_SYSTEM_PROMPT =
   ' **登录结果断言（重要）**：提交后优先基于 **DSL 中实际存在的元素** 或页面文案断言——例如登录弹层 `not.toBeVisible()`、出现「退出/个人中心/账户」等 `getByText`、或表单内错误提示 `toBeVisible()`。**禁止**臆造 `.user-avatar`、`.header-user` 等未在 DSL 出现的通用 class。**禁止**用 `page.waitForTimeout` 代替 `expect` 等待。若无法可靠断言登录成功，至少断言：提交后无可见错误提示，或登录弹层已关闭。' +
   ' **页面就绪（重要）**：服务端已用 `domcontentloaded` 打开目标页，**禁止** `page.waitForLoadState("networkidle")` 或 `"load"`（SPA 长连接会导致永不返回）。直接 `expect(目标元素).toBeVisible()` 或点击 DSL 中的 selector。' +
   ' **Selector 优先级**：交互与断言**必须优先使用页面 DSL 里的 `selector`（含 `live-search-*` 实时探测项）**；搜索场景：点击 `.search-icon`，断言 `.search-menu-wrap`，输入 `.search-menu-wrap input.ant-input`。**禁止** `input[placeholder*="搜索"]` / `getByPlaceholder`（placeholder 常为空）。禁止 `[class*="search"]`、`button:has(svg)`、逗号拼接猜测列表；locator 必须 `.first()`。' +
-  ' 同文件内 `test` 按执行顺序从上到下排列；必要时用 `test.describe` 分组（可选）。'
+  ' 同文件内 `test` 按执行顺序从上到下排列；必要时用 `test.describe` 分组（可选）。' +
+  ' **执行收尾**：服务端会在**全部** `test` 体执行完毕后默认停留 6 秒再结束（便于观察最终页面）；**禁止**在生成代码末尾用 `waitForTimeout` 实现该停留。'
 
 /** 单步子任务：只输出一条 test */
 export const TEST_CODE_FRAGMENT_SYSTEM_PROMPT =

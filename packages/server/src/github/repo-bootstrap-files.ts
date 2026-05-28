@@ -1,5 +1,10 @@
 /** 新建 `playwright-test-code` 仓库时写入的 CI / Node 引导文件 */
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+const PACKAGE_LOCK_JSON = readFileSync(join(__dirname, 'bootstrap', 'package-lock.json'), 'utf8')
+
 export type RepoBootstrapFile = {
   path: string
   content: string
@@ -60,7 +65,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
@@ -104,6 +109,11 @@ jobs:
   }
 }
 `,
+  },
+  {
+    path: 'package-lock.json',
+    commitMessage: 'chore: add package-lock for CI npm cache',
+    content: PACKAGE_LOCK_JSON,
   },
   {
     path: 'playwright.config.ts',
@@ -172,6 +182,17 @@ function buildTestEnv() {
     if (typeof v === 'string' && v.length > 0) out[key] = v;
   }
   return out;
+}
+
+function hasTestCredentials(testEnv) {
+  return Boolean(testEnv.TEST_USERNAME && testEnv.TEST_PASSWORD);
+}
+
+/** 含 testEnv 凭据或明显为登录流程的 spec，在无 Secrets 时跳过以免 CI 误报 */
+function shouldSkipSpecWithoutCredentials(content, testEnv) {
+  if (hasTestCredentials(testEnv)) return false;
+  if (/\\btestEnv\\.(TEST_USERNAME|TEST_PASSWORD)\\b/.test(content)) return true;
+  return /moonx-login|login-modal|登录弹|登入弹|test\\([^)]*登录/i.test(content);
 }
 
 function extractAllTestCallbackBodies(source) {
@@ -248,6 +269,9 @@ async function runSpecOnPage(page, content, perTestTimeout, testEnv, logs) {
       logs.push(\`[error] 第 \${bi + 1} 段: \${String(e)}\`);
     }
   }
+  const POST_TEST_DWELL_MS = 6000;
+  logs.push(\`[runner] 全部用例执行完毕，停留 \${POST_TEST_DWELL_MS / 1000}s\`);
+  await page.waitForTimeout(POST_TEST_DWELL_MS);
   return { passed, failed };
 }
 
@@ -273,16 +297,28 @@ async function main() {
   }
 
   const testEnv = buildTestEnv();
+  if (!hasTestCredentials(testEnv)) {
+    console.log('[runner] 未配置 TEST_USERNAME/TEST_PASSWORD：将跳过依赖登录凭据的 spec 文件');
+  }
   const totalTimeout = Number(process.env.TEST_TIMEOUT_MS ?? 120_000);
   const perTestTimeout = Math.max(15_000, Math.floor(totalTimeout / 4));
   const headless = process.env.HEADED !== '1' && process.env.HEADED !== 'true';
 
   let totalPassed = 0;
   let totalFailed = 0;
+  let totalSkipped = 0;
   const browser = await chromium.launch({ headless });
   try {
     for (const file of entries) {
       const content = await readFile(join(testsDir, file), 'utf8');
+      if (shouldSkipSpecWithoutCredentials(content, testEnv)) {
+        console.log(\`\\n=== \${file} ===\`);
+        console.log(
+          '[skip] 需要 Actions Secrets 或 .env 中的 TEST_USERNAME、TEST_PASSWORD（登录类用例）',
+        );
+        totalSkipped++;
+        continue;
+      }
       console.log(\`\\n=== \${file} ===\`);
       const context = await browser.newContext();
       const page = await context.newPage();
@@ -300,7 +336,7 @@ async function main() {
     await browser.close();
   }
 
-  console.log(\`\\n合计：通过 \${totalPassed} · 失败 \${totalFailed}\`);
+  console.log(\`\\n合计：通过 \${totalPassed} · 失败 \${totalFailed} · 跳过 \${totalSkipped}\`);
   process.exit(totalFailed > 0 ? 1 : 0);
 }
 
@@ -330,9 +366,11 @@ main().catch((e) => {
 | Secret | 说明 |
 |--------|------|
 | \`BASE_URL\` | 被测页面 URL（也可写在 \`.browser-test-agent.json\`） |
-| \`TEST_USERNAME\` | 登录账号（可选） |
-| \`TEST_PASSWORD\` | 登录密码（可选） |
+| \`TEST_USERNAME\` | 登录账号（**含登录类 spec 时必填**） |
+| \`TEST_PASSWORD\` | 登录密码（**含登录类 spec 时必填**） |
 | \`RUN_TEST_ENV_KEYS\` | 额外注入键名，逗号分隔（可选） |
+
+未配置登录凭据时，runner 会**跳过**引用 \`testEnv\` 或标题含「登录」的 spec，避免 \`fill(undefined)\` 导致 CI 失败；搜索等非登录用例仍会执行。
 
 推送 \`tests/\` 变更或手动 **Run workflow** 即可在 Node 20 + Chromium 环境执行。
 
