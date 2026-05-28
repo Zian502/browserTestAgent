@@ -93,6 +93,16 @@ export function sanitizeGeneratedTestCode(code: string): string {
   )
   out = out.replace(/\n[ \t]*await[ \t]+page\.waitForTimeout\s*\([^)]*\)\s*;?[ \t]*(?:\/\/[^\n]*)?\n/g, '\n')
 
+  // 移除 prompt 禁止的臆造登录成功断言
+  out = out.replace(
+    /\n[ \t]*(?:const\s+\w+\s*=\s*)?page\.locator\(\s*['"][^'"]*\.user-avatar[^'"]*['"]\s*\)[^\n]*\n/g,
+    '\n',
+  )
+  out = out.replace(
+    /\n[ \t]*await\s+expect\(\s*page\.locator\(\s*['"][^'"]*(?:user-avatar|header-user)[^'"]*['"]\s*\)[^\n]*\n/g,
+    '\n',
+  )
+
   out = stripRiskyLocatorFragments(out)
   out = normalizeSearchInputLocators(out)
   out = ensureFirstOnBroadLocators(out)

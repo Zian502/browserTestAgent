@@ -195,6 +195,18 @@ function shouldSkipSpecWithoutCredentials(content, testEnv) {
   return /moonx-login|login-modal|登录弹|登入弹|test\\([^)]*登录/i.test(content);
 }
 
+/** 与当前 BASE_URL 不匹配或含已废弃臆造 selector 的旧版 spec */
+function skipSpecReason(content, baseUrl) {
+  const url = String(baseUrl ?? '').toLowerCase();
+  if (/moonx-login/.test(content) && !url.includes('moonx')) {
+    return '含 moonx-login 选择器，与当前 BASE_URL 不匹配（请用 Agent 按 DSL 重新生成）';
+  }
+  if (/\\.user-avatar|\\.header-user|\\[data-testid="user-avatar"\\]/.test(content)) {
+    return '含已废弃臆造 selector（.user-avatar 等），请由 Agent 重新生成';
+  }
+  return null;
+}
+
 function extractAllTestCallbackBodies(source) {
   const bodies = [];
   let pos = 0;
@@ -311,10 +323,13 @@ async function main() {
   try {
     for (const file of entries) {
       const content = await readFile(join(testsDir, file), 'utf8');
-      if (shouldSkipSpecWithoutCredentials(content, testEnv)) {
+      const incompatible = skipSpecReason(content, baseUrl);
+      if (incompatible || shouldSkipSpecWithoutCredentials(content, testEnv)) {
         console.log(\`\\n=== \${file} ===\`);
         console.log(
-          '[skip] 需要 Actions Secrets 或 .env 中的 TEST_USERNAME、TEST_PASSWORD（登录类用例）',
+          incompatible
+            ? \`[skip] \${incompatible}\`
+            : '[skip] 需要 Actions Secrets 或 .env 中的 TEST_USERNAME、TEST_PASSWORD（登录类用例）',
         );
         totalSkipped++;
         continue;
