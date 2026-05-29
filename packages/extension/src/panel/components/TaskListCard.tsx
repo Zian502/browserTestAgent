@@ -207,6 +207,7 @@ export function TaskListCard() {
           {mainTasks.map((main) => (
             <div key={main.id} style={mainSection}>
               <div style={mainTitleBar}>
+                <TaskStatusIcon status={main.status} />
                 <span style={{ flex: 1, minWidth: 0 }}>{main.title}</span>
                 {main.pipeline ? (
                   <span
@@ -222,6 +223,9 @@ export function TaskListCard() {
                     {main.pipeline}
                   </span>
                 ) : null}
+                <span style={{ fontSize: 10, color: '#6b7280', flexShrink: 0 }}>
+                  {STATUS_LABEL[main.status] ?? main.status}
+                </span>
               </div>
               <div style={subTaskWrap}>
                 {main.subTasks.map((task) => {

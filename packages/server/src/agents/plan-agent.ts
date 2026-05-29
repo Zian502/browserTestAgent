@@ -276,6 +276,7 @@ function buildTestMainWithSteps(
     id: mainId,
     title: mainTitle,
     pipeline: 'test',
+    status: 'pending',
     subTasks,
   }
 }
@@ -335,7 +336,7 @@ function buildSimpleMainTask(
   ]
 
   return {
-    main: { id: mainId, title: mainTitle, pipeline, subTasks },
+    main: { id: mainId, title: mainTitle, pipeline, status: 'pending', subTasks },
     tailId: reportId,
   }
 }

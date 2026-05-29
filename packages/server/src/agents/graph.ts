@@ -4,6 +4,7 @@ import { mainAgentNode } from './main-agent'
 import { planAgentNode } from './plan-agent'
 import { parseHtmlAgentNode } from './parse-html-agent'
 import { testCodeAgentNode } from './test-code-agent'
+import { reviewAgentNode } from './review-agent'
 import { seoAgentNode } from './seo-agent'
 import { pagespeedAgentNode } from './pagespeed-agent'
 import { reportAgentNode } from './report-agent'
@@ -74,6 +75,35 @@ async function dispatcherNode(state: State) {
   })
 }
 
+async function testCodeAgentWrapper(state: State, config: LangGraphRunnableConfig) {
+  try {
+    const result = await testCodeAgentNode(state, config)
+    if (result instanceof Command) return result
+    return result
+  } catch (e) {
+    const err = String(e)
+    const taskId = findTaskId(state.taskPlan, 'testCodeAgent')
+    return {
+      agentOutputs: { testCodeAgent: { status: 'failed' as const, error: err } },
+      taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'failed') : state.taskPlan,
+      streamEvents: [
+        agentObservation('testCodeAgent', 'failed', {
+          taskId,
+          summary: err,
+          data: { message: err },
+        }),
+        {
+          type: 'agent_failed' as const,
+          agentName: 'testCodeAgent',
+          taskId,
+          payload: { message: err },
+          timestamp: Date.now(),
+        },
+      ],
+    } as Partial<State>
+  }
+}
+
 async function singleAgentNode(
   state: State,
   assignTo: 'testCodeAgent' | 'seoAgent' | 'pagespeedAgent',
@@ -109,11 +139,16 @@ async function finalSummaryNode(state: State) {
   if (state.runnerSessionId?.trim() && state.usePlaywrightBrowser) {
     await disposePlaywrightSession(state.runnerSessionId).catch(() => {})
   }
+  const runFailed =
+    Boolean(state.testReviewContext) ||
+    state.taskPlan.some((m) => m.status === 'failed') ||
+    state.agentOutputs?.testCodeAgent?.status === 'failed'
   return {
     streamEvents: [
       {
         type: 'complete' as const,
         payload: {
+          ok: !runFailed,
           agentOutputs: state.agentOutputs,
           reports: state.reports,
         },
@@ -133,6 +168,7 @@ export function buildGraph() {
         'planAgent',
         'parseHtmlAgent',
         'testCodeAgent',
+        'reviewAgent',
         'seoAgent',
         'pagespeedAgent',
         'reportAgent',
@@ -141,11 +177,10 @@ export function buildGraph() {
       ],
     })
     .addNode('parseHtmlAgent', parseHtmlAgentNode, { ends: ['dispatcher'] })
-    .addNode('testCodeAgent', (s: State, config: LangGraphRunnableConfig) =>
-      singleAgentNode(s, 'testCodeAgent', (st) => testCodeAgentNode(st, config)),
-    {
-      ends: ['dispatcher'],
+    .addNode('testCodeAgent', testCodeAgentWrapper, {
+      ends: ['dispatcher', 'reviewAgent'],
     })
+    .addNode('reviewAgent', reviewAgentNode, { ends: ['finalSummary'] })
     .addNode('seoAgent', (s: State) => singleAgentNode(s, 'seoAgent', seoAgentNode), { ends: ['dispatcher'] })
     .addNode('pagespeedAgent', (s: State) => singleAgentNode(s, 'pagespeedAgent', pagespeedAgentNode), {
       ends: ['dispatcher'],

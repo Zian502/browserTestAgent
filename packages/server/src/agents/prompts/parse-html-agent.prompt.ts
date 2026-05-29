@@ -69,10 +69,15 @@ export function wrapCompressedHtmlWithChunkMarkers(
   ].join('\n')
 }
 
-export function buildParseHtmlUserMessage(compressedHtml: string, pageUrl: string): string {
+export function buildParseHtmlUserMessage(compressedHtml: string, pageUrl: string, opts?: { stepIndex?: number; stepTitle?: string }): string {
   const url = pageUrl.trim() || '(unknown)'
+  const stepNote =
+    opts?.stepIndex != null && opts.stepIndex > 0
+      ? `\n**解析上下文**：本 DSL 对应测试流水线第 ${opts.stepIndex + 1} 步${opts.stepTitle ? `（${opts.stepTitle}）` : ''}；HTML 来自**前序 test 片段执行后** CDP 刷新，可能含已展开的弹框/下拉/抽屉，请重点提取弹层容器与选项节点。\n`
+      : ''
   return [
     `页面 URL：${url}`,
+    stepNote,
     '',
     '以下为压缩后的 HTML，请提取并输出 PageDSL JSON：',
     '',

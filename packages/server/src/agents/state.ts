@@ -10,15 +10,31 @@ export type AgentName =
   | 'planAgent'
   | 'parseHtmlAgent'
   | 'testCodeAgent'
+  | 'reviewAgent'
   | 'seoAgent'
   | 'pagespeedAgent'
   | 'reportAgent'
+
+/** testCodeAgent 执行失败后交给 reviewAgent 的上下文 */
+export interface TestReviewContext {
+  taskId?: string
+  taskTitle?: string
+  pageUrl: string
+  userInput: string
+  error?: string
+  passed: number
+  failed: number
+  logs: string[]
+  codePreview?: string
+}
 
 /** 单个子任务：对应一次 agent 执行，全局 id 在 flatten 后仍唯一 */
 export type TaskPlanStepType = 'parseHtml' | 'testCode' | 'seo' | 'pagespeed' | 'report'
 
 /** test 流水线：子任务测试代码角色 */
 export type TestStepRole = 'fragment' | 'merge'
+
+export type TaskPlanStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
 
 export interface TestCodeFragment {
   taskId: string
@@ -36,7 +52,7 @@ export interface TaskPlanStep {
   assignTo: AgentName
   dependencies: string[]
   canParallel: boolean
-  status: 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+  status: TaskPlanStatus
   cacheKey?: string
   /** 所属主任务 id（test 多段拆分时的分组键） */
   groupId?: string
@@ -57,6 +73,7 @@ export interface TaskPlanMain {
   id: string
   title: string
   pipeline: PipelineKind
+  status: TaskPlanStatus
   subTasks: TaskPlanStep[]
 }
 
@@ -106,6 +123,7 @@ export interface StreamEvent {
     | 'tool_failure'
     | 'report_ready'
     | 'text'
+    | 'task_status'
     | 'complete'
   agentName?: AgentName
   taskId?: string
@@ -150,6 +168,11 @@ export const BrowserTestState = Annotation.Root({
     default: () => ({}),
   }),
   /** 按主任务 id 累积各 test 片段代码，供 merge 子任务串联 */
+  /** 测试执行失败时由 testCodeAgent 写入，供 reviewAgent 消费 */
+  testReviewContext: Annotation<TestReviewContext | null>({
+    reducer: (_, next) => next ?? null,
+    default: () => null,
+  }),
   testCodeFragments: Annotation<Record<string, TestCodeFragment[]>>({
     reducer: (prev, next) => {
       const out = { ...prev }

@@ -21,9 +21,6 @@ export interface RunTestResult {
   skipped?: boolean
 }
 
-/** 全部 test 体执行完毕后默认停留，便于观察最终页面状态 */
-export const POST_TEST_DWELL_MS = 6_000
-
 /** 从源码中依次解析每一段 `test(..., async (...) => { ... })` 的箭头函数体（不含最外层大括号） */
 export function extractAllTestCallbackBodies(source: string): string[] {
   const bodies: string[] = []
@@ -136,8 +133,7 @@ export const playwrightRunner = {
           logs.push(`[error] 第 ${bi + 1} 段: ${String(e)}`)
         }
       }
-      logs.push(`[runner] 全部用例执行完毕，停留 ${POST_TEST_DWELL_MS / 1000}s`)
-      await page.waitForTimeout(POST_TEST_DWELL_MS)
+      logs.push('[runner] 全部用例执行完毕')
       return { passed, failed, logs, skipped: false }
     } finally {
       page.off('console', onConsole)

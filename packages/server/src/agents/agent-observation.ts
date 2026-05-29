@@ -7,6 +7,7 @@ export const AGENT_LABEL_ZH: Record<AgentName, string> = {
   planAgent: '任务规划',
   parseHtmlAgent: 'HTML 解析',
   testCodeAgent: 'Playwright 测试',
+  reviewAgent: '测试失败复盘',
   seoAgent: 'SEO 分析',
   pagespeedAgent: 'PageSpeed 性能',
   reportAgent: '报告生成',

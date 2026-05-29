@@ -281,9 +281,7 @@ async function runSpecOnPage(page, content, perTestTimeout, testEnv, logs) {
       logs.push(\`[error] 第 \${bi + 1} 段: \${String(e)}\`);
     }
   }
-  const POST_TEST_DWELL_MS = 6000;
-  logs.push(\`[runner] 全部用例执行完毕，停留 \${POST_TEST_DWELL_MS / 1000}s\`);
-  await page.waitForTimeout(POST_TEST_DWELL_MS);
+  logs.push('[runner] 全部用例执行完毕');
   return { passed, failed };
 }
 

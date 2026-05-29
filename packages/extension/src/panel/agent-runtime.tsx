@@ -6,7 +6,7 @@ import {
   type ChatModelRunResult,
   type ThreadMessageLike,
 } from '@assistant-ui/react'
-import { useTaskStore } from './stores/task-store'
+import { useTaskStore, type TaskStatus } from './stores/task-store'
 import { getPageContextForAgent, isAcceptablePageUrl, isExtensionRuntime } from '../lib/page-context'
 import { resolveLatestUserInput } from '../lib/user-intent-url'
 import { AGENT_API_BASE } from './agent-api-base'
@@ -18,6 +18,7 @@ function agentLabel(name?: string) {
     planAgent: '规划',
     parseHtmlAgent: 'HTML 解析',
     testCodeAgent: 'Playwright 测试',
+    reviewAgent: '测试复盘',
     seoAgent: 'SEO',
     pagespeedAgent: 'PageSpeed',
     reportAgent: '报告',
@@ -28,7 +29,7 @@ function agentLabel(name?: string) {
 function createAdapter(): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
-      const { reset, setTasksFromPlan, updateByTaskId, updateByAgent, addReport, pushAgentObservation } =
+      const { reset, setTasksFromPlan, updateByTaskId, updateByAgent, updateMainTaskStatus, addReport, pushAgentObservation } =
         useTaskStore.getState()
       reset()
 
@@ -297,12 +298,27 @@ function createAdapter(): ChatModelAdapter {
                   (summary ? `\n${summary}` : '') +
                   (dataSnippet ? `\n\`\`\`json\n${dataSnippet}\n\`\`\`\n` : '\n'),
               )
+            } else if (event === 'task_status') {
+              const taskId = data.taskId != null ? String(data.taskId) : ''
+              const payload = (data.payload ?? {}) as { scope?: string; status?: string }
+              const status = (payload.status ?? 'pending') as TaskStatus
+              if (!taskId) continue
+              if (payload.scope === 'main') {
+                updateMainTaskStatus(taskId, status)
+              } else {
+                updateByTaskId(taskId, { status })
+              }
             } else if (event === 'text') {
               const payload = data.payload as { content?: string } | undefined
               const body = typeof payload?.content === 'string' ? payload.content : ''
               if (body) yield* bump(`${body}\n\n`)
             } else if (event === 'complete') {
-              yield* bump(`\n---\n✨ **全部完成**\n`)
+              const payload = (data.payload ?? {}) as { ok?: boolean }
+              if (payload.ok === false) {
+                yield* bump(`\n---\n❌ **任务失败**（测试未通过，已跳过剩余步骤）\n`)
+              } else {
+                yield* bump(`\n---\n✨ **全部完成**\n`)
+              }
             } else if (event === 'error') {
               yield* bump(`\n❌ ${String(data.message ?? data)}\n`)
             }

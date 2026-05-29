@@ -5,6 +5,7 @@ const AGENT_LABELS: Record<string, string> = {
   planAgent: '规划',
   parseHtmlAgent: 'HTML 解析',
   testCodeAgent: 'Playwright 测试',
+  reviewAgent: '测试复盘',
   seoAgent: 'SEO',
   pagespeedAgent: 'PageSpeed',
   reportAgent: '报告',
@@ -160,7 +161,15 @@ export function formatSseDataForAssistantContent(data: Record<string, unknown>):
     return body ? `${body}\n\n` : ''
   }
 
+  if (event === 'task_status') {
+    return ''
+  }
+
   if (event === 'complete') {
+    const payload = payloadRecord(data)
+    if (payload.ok === false) {
+      return '\n---\n❌ **任务失败**（测试未通过，已跳过剩余步骤）\n'
+    }
     return '\n---\n✨ **全部完成**\n'
   }
 

@@ -1,4 +1,4 @@
-import type { AgentName, TaskPlanMain, TaskPlanStep } from './state'
+import type { AgentName, StreamEvent, TaskPlanMain, TaskPlanStatus, TaskPlanStep } from './state'
 
 /** 将所有主任务下的子任务按主任务顺序展平（用于依赖解析与调度顺序） */
 export function flattenTaskPlan(groups: TaskPlanMain[]): TaskPlanStep[] {
@@ -17,6 +17,49 @@ export function findStepByTaskId(groups: TaskPlanMain[], taskId: string): TaskPl
     if (s) return s
   }
   return undefined
+}
+
+export function findMainTaskByStepId(groups: TaskPlanMain[], stepId: string): TaskPlanMain | undefined {
+  return groups.find((g) => g.subTasks.some((s) => s.id === stepId))
+}
+
+export function findMainTaskWithFailedStep(groups: TaskPlanMain[]): TaskPlanMain | undefined {
+  return groups.find((g) => g.subTasks.some((s) => s.status === 'failed'))
+}
+
+export function markMainTaskStatus(
+  groups: TaskPlanMain[],
+  mainId: string,
+  status: TaskPlanStatus,
+): TaskPlanMain[] {
+  return groups.map((g) => (g.id === mainId ? { ...g, status } : g))
+}
+
+/** 将 taskPlan 中主/子任务状态同步为 SSE，供扩展侧更新 UI */
+export function buildTaskStatusSyncEvents(plan: TaskPlanMain[]): StreamEvent[] {
+  const ts = Date.now()
+  const events: StreamEvent[] = []
+  for (const main of plan) {
+    if (main.status !== 'pending') {
+      events.push({
+        type: 'task_status',
+        taskId: main.id,
+        payload: { scope: 'main', status: main.status },
+        timestamp: ts,
+      })
+    }
+    for (const sub of main.subTasks) {
+      if (sub.status === 'skipped' || sub.status === 'failed') {
+        events.push({
+          type: 'task_status',
+          taskId: sub.id,
+          payload: { scope: 'sub', status: sub.status },
+          timestamp: ts,
+        })
+      }
+    }
+  }
+  return events
 }
 
 function mapSteps(groups: TaskPlanMain[], fn: (step: TaskPlanStep) => TaskPlanStep): TaskPlanMain[] {
@@ -63,4 +106,9 @@ export function allTasksFinished(groups: TaskPlanMain[]): boolean {
   const flat = flattenTaskPlan(groups)
   if (flat.length === 0) return true
   return flat.every((t) => ['done', 'failed', 'skipped'].includes(t.status))
+}
+
+/** 测试失败后跳过尚未执行的子任务，以便直接进入复盘与收尾 */
+export function skipPendingTasks(groups: TaskPlanMain[]): TaskPlanMain[] {
+  return mapSteps(groups, (s) => (s.status === 'pending' ? { ...s, status: 'skipped' as const } : s))
 }

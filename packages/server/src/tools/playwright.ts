@@ -4,6 +4,7 @@ import {
   attachHeldSessionForTargetUrl,
   createHeldSessionBlankPage,
   disposePlaywrightSession,
+  ensurePageAtTargetUrl,
   openPageAndCaptureHtmlViaCDP,
   getPlaywrightSessionPage,
   isPlaywrightCdpAttachActive,
@@ -149,11 +150,10 @@ export async function executePlaywrightCoreTool(input: PlaywrightCoreInput): Pro
     const attachOnly = await isPlaywrightCdpAttachActive()
 
     async function gotoTargetOrFail(): Promise<PlaywrightCoreResult | null> {
-      if (!targetUrl || attachOnly) return null
+      if (!targetUrl) return null
       try {
-        await page.goto(targetUrl, {
-          waitUntil: 'domcontentloaded',
-          timeout: rt.timeoutMs ?? 90_000,
+        await ensurePageAtTargetUrl(page, targetUrl, {
+          navigationTimeoutMs: rt.timeoutMs ?? 90_000,
         })
         return null
       } catch (e) {

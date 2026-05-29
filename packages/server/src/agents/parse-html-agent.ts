@@ -193,12 +193,17 @@ function compressedSourceForLlm(compressedSkillOut: Record<string, unknown>, pag
   return (compressedHtml.trim() ? compressedHtml : pageHtml) ?? ''
 }
 
-async function dslFromLlmSingle(sourceForLlm: string, pageUrl: string, pageHtmlForFallback: string): Promise<PageDSL | null> {
+async function dslFromLlmSingle(
+  sourceForLlm: string,
+  pageUrl: string,
+  pageHtmlForFallback: string,
+  parseStep?: { stepIndex?: number; stepTitle?: string },
+): Promise<PageDSL | null> {
   if (!sourceForLlm.trim() || !hasChatLlm()) return null
   const response = await invokeChatLlm(
     [
       { role: 'system', content: PARSE_HTML_DSL_SYSTEM_PROMPT },
-      { role: 'user', content: buildParseHtmlUserMessage(sourceForLlm, pageUrl) },
+      { role: 'user', content: buildParseHtmlUserMessage(sourceForLlm, pageUrl, parseStep) },
     ],
     { temperature: 0 },
   )
@@ -286,15 +291,31 @@ async function dslFromLlm(
   sourceForLlm: string,
   pageUrl: string,
   pageHtmlForFallback: string,
+  parseStep?: { stepIndex?: number; stepTitle?: string },
 ): Promise<{ dsl: PageDSL | null; llmChunks: number }> {
   if (!sourceForLlm.trim() || !hasChatLlm()) return { dsl: null, llmChunks: 0 }
   const maxChunk = maxChunkCharsForLlm()
   if (sourceForLlm.length <= maxChunk) {
-    const dsl = await dslFromLlmSingle(sourceForLlm, pageUrl, pageHtmlForFallback)
+    const dsl = await dslFromLlmSingle(sourceForLlm, pageUrl, pageHtmlForFallback, parseStep)
     return { dsl, llmChunks: dsl ? 1 : 0 }
   }
   const { dsl, chunkCount } = await dslFromLlmChunked(sourceForLlm, pageUrl, pageHtmlForFallback, maxChunk)
   return { dsl, llmChunks: chunkCount }
+}
+
+function fragmentTitleForParseTask(state: State, parseTask: ReturnType<typeof findStepByTaskId>): string | undefined {
+  if (parseTask?.testStepIndex == null || !parseTask.groupId) return undefined
+  for (const main of state.taskPlan) {
+    if (main.id !== parseTask.groupId) continue
+    const fragment = main.subTasks.find(
+      (s) =>
+        s.type === 'testCode' &&
+        s.testStepRole === 'fragment' &&
+        s.testStepIndex === parseTask.testStepIndex,
+    )
+    return fragment?.title
+  }
+  return undefined
 }
 
 async function persistDslSnapshot(
@@ -337,7 +358,10 @@ export async function parseHtmlAgentNode(state: State) {
   const htmlLlmSegments =
     !sourceForLlm.trim() ? 0 : sourceForLlm.length <= maxChunk ? 1 : splitCompressedHtmlIntoChunks(sourceForLlm, maxChunk).length
 
-  const { dsl: fromLlm, llmChunks } = await dslFromLlm(sourceForLlm, state.pageUrl, pageHtml)
+  const { dsl: fromLlm, llmChunks } = await dslFromLlm(sourceForLlm, state.pageUrl, pageHtml, {
+    stepIndex: task?.testStepIndex,
+    stepTitle: fragmentTitleForParseTask(state, task),
+  })
   let dsl: PageDSL = fromLlm ?? minimalDsl(state.pageUrl, pageHtml)
 
   const sid = state.runnerSessionId?.trim()

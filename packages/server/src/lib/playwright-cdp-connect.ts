@@ -130,8 +130,8 @@ function urlParts(url: string): { origin: string; pathname: string } | null {
   }
 }
 
-/** 目标 URL 与页签 URL 是否视为同一页面（同源且路径一致，或互为前缀） */
-export function pageMatchesTargetUrl(pageHref: string, targetUrl: string): boolean {
+/** 同源且 pathname 一致（忽略 query/hash）— 用于判断是否需要 goto */
+export function pagePathMatchesTargetUrl(pageHref: string, targetUrl: string): boolean {
   const target = targetUrl.trim()
   if (!target) return true
   const href = pageHref.trim()
@@ -139,11 +139,21 @@ export function pageMatchesTargetUrl(pageHref: string, targetUrl: string): boole
 
   const a = urlParts(href)
   const b = urlParts(target)
-  if (a && b && a.origin === b.origin && a.pathname === b.pathname) return true
+  return Boolean(a && b && a.origin === b.origin && a.pathname === b.pathname)
+}
+
+/** 查找页签：同源且路径一致，或 URL 互为前缀（子路径仍算同一页签） */
+export function pageMatchesTargetUrl(pageHref: string, targetUrl: string): boolean {
+  if (pagePathMatchesTargetUrl(pageHref, targetUrl)) return true
+
+  const target = targetUrl.trim()
+  if (!target) return true
+  const href = pageHref.trim()
+  if (!href || href === 'about:blank') return false
 
   const hrefBase = href.split(/[?#]/)[0]
   const targetBase = target.split(/[?#]/)[0]
-  return hrefBase === targetBase || hrefBase.startsWith(targetBase) || targetBase.startsWith(hrefBase)
+  return hrefBase.startsWith(targetBase) || targetBase.startsWith(hrefBase)
 }
 
 function collectOpenPages(browser: Browser): Page[] {

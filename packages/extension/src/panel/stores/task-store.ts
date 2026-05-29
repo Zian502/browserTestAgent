@@ -15,6 +15,7 @@ export interface UiMainTask {
   id: string
   title: string
   pipeline?: string
+  status: TaskStatus
   subTasks: UiSubTask[]
 }
 
@@ -36,6 +37,7 @@ interface TaskStore {
   agentObservationLog: AgentObservationLogEntry[]
   setTasksFromPlan: (payload: unknown) => void
   updateByTaskId: (taskId: string, patch: Partial<Pick<UiSubTask, 'status'>> & { result?: unknown }) => void
+  updateMainTaskStatus: (mainTaskId: string, status: TaskStatus) => void
   /** 无 taskId 时的回退：按 assignTo 更新（多段同 agent 时可能不精确） */
   updateByAgent: (agentName: string, patch: Partial<Pick<UiSubTask, 'status'>> & { result?: unknown }) => void
   addReport: (type: string, path: string) => void
@@ -66,7 +68,13 @@ function normalizeMainTasksFromServer(payload: unknown): UiMainTask[] {
         status: ((sx.status as TaskStatus) ?? 'pending') as TaskStatus,
       }
     })
-    return { id, title, pipeline, subTasks }
+    return {
+      id,
+      title,
+      pipeline,
+      status: ((gx.status as TaskStatus) ?? 'pending') as TaskStatus,
+      subTasks,
+    }
   })
 }
 
@@ -83,7 +91,7 @@ function normalizeLegacyFlatTasks(payload: unknown): UiMainTask[] {
     }
   })
   if (subTasks.length === 0) return []
-  return [{ id: 'plan', title: '执行计划', subTasks }]
+  return [{ id: 'plan', title: '执行计划', status: 'pending' as TaskStatus, subTasks }]
 }
 
 function newObservationId() {
@@ -108,6 +116,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         ...m,
         subTasks: m.subTasks.map((s) => (s.id === taskId ? { ...s, ...rest } : s)),
       })),
+    })
+  },
+  updateMainTaskStatus: (mainTaskId, status) => {
+    set({
+      mainTasks: get().mainTasks.map((m) => (m.id === mainTaskId ? { ...m, status } : m)),
     })
   },
   updateByAgent: (agentName, patch) => {

@@ -8,7 +8,7 @@ import {
   isPlaywrightCdpAttachMode,
   isPlaywrightCdpFallbackLaunchEnabled,
   listOpenPageUrls,
-  pageMatchesTargetUrl,
+  pagePathMatchesTargetUrl,
 } from './playwright-cdp-connect'
 
 export {
@@ -74,23 +74,24 @@ async function launchChromeLikeBrowser(opts: PlaywrightSessionLaunchOptions): Pr
   }
 }
 
-async function navigatePageIfNeeded(
+/** 若当前页 pathname 与目标不一致，则在同一页签导航到目标 URL */
+export async function ensurePageAtTargetUrl(
   page: Page,
   pageUrl: string,
-  opts: PlaywrightSessionLaunchOptions,
+  opts: PlaywrightSessionLaunchOptions = {},
 ): Promise<void> {
   const url = pageUrl.trim()
   if (!url) return
   const navTimeout = opts.navigationTimeoutMs ?? 90_000
   page.setDefaultNavigationTimeout(navTimeout)
-  if (pageMatchesTargetUrl(page.url(), url)) return
+  if (pagePathMatchesTargetUrl(page.url(), url)) return
   await page.goto(url, {
     waitUntil: opts.waitUntil ?? 'domcontentloaded',
     timeout: navTimeout,
   })
 }
 
-/** 挂接模式：仅复用已打开且 URL 匹配的页签，不启动浏览器、不新建页签、不导航 */
+/** 挂接模式：复用已打开且 URL 匹配的页签，并在 pathname 不一致时导航到目标 URL */
 async function acquireBrowserPageAttachOnly(
   pageUrl: string,
   opts: PlaywrightSessionLaunchOptions = {},
@@ -110,15 +111,14 @@ async function acquireBrowserPageAttachOnly(
         `请先在 Chrome 中打开该页面。当前页签：${open.length ? open.join(' | ') : '(无)'}`,
     )
   }
-  const navTimeout = opts.navigationTimeoutMs ?? 90_000
-  page.setDefaultNavigationTimeout(navTimeout)
   await page.bringToFront().catch(() => {})
+  await ensurePageAtTargetUrl(page, url, opts)
   return { browser, context: page.context(), page, external: true }
 }
 
 /**
  * 取得用于会话的 Browser + Page：
- * - `PLAYWRIGHT_CDP_URL`：挂接已有 Chrome，仅匹配现有页签；
+ * - `PLAYWRIGHT_CDP_URL`：挂接已有 Chrome，匹配现有页签并在 pathname 不一致时导航到目标 URL；
  * - 否则启动 Chromium/Chrome 并导航。
  */
 async function acquireLaunchedBrowserPage(
@@ -128,7 +128,7 @@ async function acquireLaunchedBrowserPage(
   const browser = await launchChromeLikeBrowser(opts)
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
   const page = await context.newPage()
-  await navigatePageIfNeeded(page, pageUrl, opts)
+  await ensurePageAtTargetUrl(page, pageUrl, opts)
   return { browser, context, page, external: false }
 }
 
