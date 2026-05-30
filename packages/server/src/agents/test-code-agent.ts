@@ -14,6 +14,7 @@ import {
 import { agentObservation } from './agent-observation'
 import { buildRunTestInjectedEnv } from '../lib/run-test-env'
 import {
+  promptPageUrl,
   resolveSubtaskTargetUrl,
   runnerPageUrlStatePatch,
   shouldForceNavigateToPromptUrl,
@@ -369,7 +370,7 @@ export async function testCodeAgentNode(state: State, config?: LangGraphRunnable
       throw new Error(`主任务 ${groupId} 无可用测试片段，无法合并`)
     }
 
-    const code = mergeTestCodeFragments(fragmentCodes)
+    const code = mergeTestCodeFragments(fragmentCodes, { promptPageUrl: promptPageUrl(state) })
     const out = await runGeneratedTest(state, task, taskId, code, emit, 'merge')
     const run = parseTestRunOutput(out as Record<string, unknown>)
 

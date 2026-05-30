@@ -26,8 +26,26 @@ export function extractTestBlocks(source: string): string[] {
   return blocks
 }
 
+export type MergeTestCodeFragmentsOptions = {
+  /** 用户提示词中的起始 URL；合并 spec 时会在最前插入 goto 测试 */
+  promptPageUrl?: string
+}
+
+/** 合并 spec 首段：从提示词 URL 重头导航 */
+export function buildPromptUrlGotoTestBlock(promptPageUrl: string): string {
+  const url = promptPageUrl.trim()
+  if (!url) return ''
+  return `test('导航到用户需求起始页', async ({ page }) => {
+  await page.goto(${JSON.stringify(url)}, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('body')).toBeVisible();
+})`
+}
+
 /** 合并多段测试片段为单个 spec 文件内容（去重 import，按序串联 test）。 */
-export function mergeTestCodeFragments(fragments: string[]): string {
+export function mergeTestCodeFragments(
+  fragments: string[],
+  options?: MergeTestCodeFragmentsOptions,
+): string {
   const importLines = new Set<string>()
   const tests: string[] = []
 
@@ -43,6 +61,9 @@ export function mergeTestCodeFragments(fragments: string[]): string {
     else if (code.includes('test(')) tests.push(code)
   }
 
+  const gotoBlock = buildPromptUrlGotoTestBlock(options?.promptPageUrl ?? '')
+  if (gotoBlock) tests.unshift(gotoBlock)
+
   if (tests.length === 0) {
     return `import { test, expect } from '@playwright/test';\n\ntest('smoke', async ({ page }) => {\n  await expect(page.locator('body')).toBeVisible();\n});\n`
   }
@@ -50,7 +71,7 @@ export function mergeTestCodeFragments(fragments: string[]): string {
   const header = importLines.size > 0 ? [...importLines].join('\n') : `import { test, expect } from '@playwright/test';`
   const body = tests.join('\n\n')
   if (tests.length > 1) {
-    return `${header}\n\n/** 多段 test 在同一 page 上按序执行；后序步骤应自带前置 UI 恢复逻辑 */\ntest.describe.serial('merged flow', () => {\n${body
+    return `${header}\n\n/** 多段 test 在同一 page 上按序执行；首段导航至提示词 URL，后序步骤应自带前置 UI 恢复逻辑 */\ntest.describe.serial('merged flow', () => {\n${body
       .split('\n')
       .map((line) => (line ? `  ${line}` : line))
       .join('\n')}\n});\n`
