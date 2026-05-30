@@ -58,8 +58,8 @@ function createAdapter(): ChatModelAdapter {
         if (!isAcceptablePageUrl(pageUrl)) {
           if (isExtensionRuntime()) {
             yield* bump(
-              '当前**无法从标签页得到有效的 http(s) 地址**（例如：空白页、内置页）。\n\n' +
-                '请先**在要分析的标签页打开目标网站**，再发送任务。\n',
+              '当前**无法得到有效的 pageUrl**。\n\n' +
+                '请在消息里写上完整 `http(s)://…` 链接（例如 `https://www.bydfi.com/zh`），或先在目标标签页打开该网站再发送。\n',
             )
           } else {
             yield* bump(

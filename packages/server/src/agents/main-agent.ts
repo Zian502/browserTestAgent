@@ -56,9 +56,22 @@ export async function mainAgentNode(state: State) {
 
   const snapshotHtml = await fileCacheService.readHtmlSnapshotByPageUrl(state.pageUrl.trim())
   if (state.runnerSessionId.trim() && snapshotHtml?.trim()) {
+    const streamEvents: StreamEvent[] = []
+    const emit = (e: StreamEvent) => {
+      streamEvents.push(e)
+    }
+    const skillCtx = { state, agentName: 'mainAgent' as const, emit }
+    await runSkill('get-html', skillCtx, {
+      phase: 'cdp_refresh',
+      sessionId: state.runnerSessionId.trim(),
+      pageUrl: state.pageUrl.trim(),
+      forceNavigate: true,
+    })
     return new Command({
       update: {
+        runnerPageUrl: state.pageUrl.trim(),
         streamEvents: [
+          ...streamEvents,
           {
             type: 'agent_start',
             agentName: 'planAgent',
@@ -97,6 +110,7 @@ export async function mainAgentNode(state: State) {
       update: {
         streamEvents,
         runnerSessionId: cap['sessionId'] as string,
+        runnerPageUrl: state.pageUrl.trim(),
         usePlaywrightBrowser: true,
       },
       goto: 'mainAgent',

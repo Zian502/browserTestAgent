@@ -142,6 +142,25 @@ export function pagePathMatchesTargetUrl(pageHref: string, targetUrl: string): b
   return Boolean(a && b && a.origin === b.origin && a.pathname === b.pathname)
 }
 
+/**
+ * 当前页是否已在 target 上，或处于 target 之下的 SPA 子路径（如前序 test 点击跳转后的充值页）。
+ * 用于避免 run_test 把 `/zh/.../recharge` 强制拉回 `/zh`。
+ */
+export function pageIsAtOrBelowTargetUrl(pageHref: string, targetUrl: string): boolean {
+  if (pagePathMatchesTargetUrl(pageHref, targetUrl)) return true
+  const target = targetUrl.trim()
+  if (!target) return true
+  const href = pageHref.trim()
+  if (!href || href === 'about:blank') return false
+
+  const a = urlParts(href)
+  const b = urlParts(target)
+  if (!a || !b || a.origin !== b.origin) return false
+  if (a.pathname === b.pathname) return true
+  const prefix = b.pathname === '/' ? '/' : `${b.pathname}/`
+  return a.pathname.startsWith(prefix)
+}
+
 /** 查找页签：同源且路径一致，或 URL 互为前缀（子路径仍算同一页签） */
 export function pageMatchesTargetUrl(pageHref: string, targetUrl: string): boolean {
   if (pagePathMatchesTargetUrl(pageHref, targetUrl)) return true
@@ -174,29 +193,31 @@ export function listOpenPageUrls(browser: Browser): string[] {
 }
 
 /**
- * 在已连接的 Chrome 中查找与 targetUrl 最匹配的页签；
- * 无匹配时返回第一个非 about: 页签，若仍无则返回 undefined。
+ * 在已连接的 Chrome 中查找用于导航到 targetUrl 的页签：
+ * 1. pathname 完全一致优先；
+ * 2. 否则同源任一页签（后续 ensurePageAtTargetUrl 会 goto）。
+ * 不用 URL 前缀匹配，避免 `/zh` 误绑到 `/zh/.../recharge`。
  */
 export function findPageForTargetUrl(browser: Browser, targetUrl: string): Page | undefined {
-  const pages = collectOpenPages(browser)
-  const target = targetUrl.trim()
-  if (!target) {
-    return pages.find((p) => !p.url().startsWith('about:')) ?? pages[0]
-  }
-
-  const targetBase = target.split(/[?#]/)[0]
-  const exact = pages.filter((p) => pageMatchesTargetUrl(p.url(), target))
-  if (exact.length === 1) return exact[0]
-  if (exact.length > 1) {
-    return (
-      exact.find((p) => p.url().split(/[?#]/)[0] === targetBase) ??
-      exact.find((p) => p.url().includes('/zh')) ??
-      exact[0]
-    )
-  }
-
-  return pages.find((p) => {
-    const href = p.url()
-    return href && href.split(/[?#]/)[0] === targetBase
+  const pages = collectOpenPages(browser).filter((p) => {
+    const u = p.url()
+    return u && !u.startsWith('about:')
   })
+  const target = targetUrl.trim()
+  if (!target) return pages[0]
+
+  const pathExact = pages.filter((p) => pagePathMatchesTargetUrl(p.url(), target))
+  if (pathExact.length === 1) return pathExact[0]
+  if (pathExact.length > 1) {
+    const targetBase = target.split(/[?#]/)[0]
+    return pathExact.find((p) => p.url().split(/[?#]/)[0] === targetBase) ?? pathExact[0]
+  }
+
+  const targetOrigin = urlParts(target)?.origin
+  if (targetOrigin) {
+    const sameOrigin = pages.filter((p) => urlParts(p.url())?.origin === targetOrigin)
+    if (sameOrigin.length > 0) return sameOrigin[0]
+  }
+
+  return pages[0]
 }

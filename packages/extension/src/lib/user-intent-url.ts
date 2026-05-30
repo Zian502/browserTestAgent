@@ -11,7 +11,7 @@ function userText(m: ThreadMessage): string {
 
 /**
  * 取**最新一条**用户消息的完整文本，作为 API 的 `userInput`。
- * 不把消息中的 URL 拆到 `pageUrl`：`pageUrl` 仅由 `getPageContextForAgent()`（当前标签或 Web 的 sessionStorage）提供。
+ * `pageUrl` 由 `getPageContextForAgent({ webComposerText })` 提供：扩展/Web 均**优先**从该文案中提取首个 http(s) URL。
  */
 export function resolveLatestUserInput(messages: readonly ThreadMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {

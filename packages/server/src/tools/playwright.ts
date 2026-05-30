@@ -4,6 +4,7 @@ import {
   attachHeldSessionForTargetUrl,
   createHeldSessionBlankPage,
   disposePlaywrightSession,
+  ensureHeldSessionAtUrl,
   ensurePageAtTargetUrl,
   openPageAndCaptureHtmlViaCDP,
   getPlaywrightSessionPage,
@@ -31,7 +32,7 @@ export function runPlaywrightExclusive<T>(fn: () => Promise<T>): Promise<T> {
 type PageCaptureInput = {
   sessionId: string
   pageUrl: string
-  launch?: Pick<PlaywrightSessionLaunchOptions, 'headless' | 'slowMoMs' | 'navigationTimeoutMs' | 'waitUntil'>
+  launch?: Pick<PlaywrightSessionLaunchOptions, 'headless' | 'slowMoMs' | 'navigationTimeoutMs' | 'waitUntil' | 'exactPath'>
 }
 
 async function capturePageHtml(input: PageCaptureInput): Promise<
@@ -45,6 +46,7 @@ async function capturePageHtml(input: PageCaptureInput): Promise<
       slowMoMs: input.launch?.slowMoMs,
       navigationTimeoutMs: input.launch?.navigationTimeoutMs,
       waitUntil: input.launch?.waitUntil,
+      exactPath: input.launch?.exactPath,
     })
     return {
       ok: true,
@@ -69,8 +71,9 @@ export type PlaywrightCoreInput =
       headless?: boolean
       slowMoMs?: number
       sessionId?: string
+      exactPath?: boolean
     }
-  | { op: 'refresh_outer_html'; sessionId: string }
+  | { op: 'refresh_outer_html'; sessionId: string; navigateToUrl?: string; navigateExact?: boolean }
   | {
       op: 'run_test'
       /** 空串或未传：启动临时浏览器页并可选先导航 `targetUrl` */
@@ -78,6 +81,10 @@ export type PlaywrightCoreInput =
       code: string
       targetUrl: string
       timeoutMs?: number
+      /** 已有会话时仍先导航到 targetUrl（首子任务对齐提示词 URL） */
+      forceNavigate?: boolean
+      /** 与 ensurePageAtTargetUrl.exactPath 一致 */
+      navigateExact?: boolean
     }
 
 export type PlaywrightCoreResult =
@@ -110,7 +117,11 @@ export async function executePlaywrightCoreTool(input: PlaywrightCoreInput): Pro
       const r = await capturePageHtml({
         sessionId,
         pageUrl: input.pageUrl.trim(),
-        launch: { headless: input.headless, slowMoMs: input.slowMoMs },
+        launch: {
+          headless: input.headless,
+          slowMoMs: input.slowMoMs,
+          exactPath: input.exactPath,
+        },
       })
       const durationMs = Date.now() - t0
       if (r.ok) {
@@ -120,7 +131,22 @@ export async function executePlaywrightCoreTool(input: PlaywrightCoreInput): Pro
     }
     if (input.op === 'refresh_outer_html') {
       try {
-        const html = await refreshSessionPageHtmlViaCDP(input.sessionId.trim())
+        const sid = input.sessionId.trim()
+        const navUrl = input.navigateToUrl?.trim()
+        const navOpts: PlaywrightSessionLaunchOptions = {
+          exactPath: input.navigateExact ?? false,
+        }
+        if (navUrl) {
+          await ensureHeldSessionAtUrl(sid, navUrl, navOpts)
+        } else if (!getPlaywrightSessionPage(sid)) {
+          return {
+            op: 'refresh_outer_html',
+            ok: false,
+            error: 'CDP 会话不存在，请提供 navigateToUrl 以挂接页签',
+            durationMs: Date.now() - t0,
+          }
+        }
+        const html = await refreshSessionPageHtmlViaCDP(sid)
         const durationMs = Date.now() - t0
         if (typeof html === 'string' && html.trim()) {
           return { op: 'refresh_outer_html', ok: true, pageHtml: html, durationMs }
@@ -151,9 +177,12 @@ export async function executePlaywrightCoreTool(input: PlaywrightCoreInput): Pro
 
     async function gotoTargetOrFail(): Promise<PlaywrightCoreResult | null> {
       if (!targetUrl) return null
+      /** 已有会话且非强制导航：保留当前页（前序 test 可能已 SPA 跳转） */
+      if (rawSid && getPlaywrightSessionPage(sid) && !rt.forceNavigate) return null
       try {
         await ensurePageAtTargetUrl(page, targetUrl, {
           navigationTimeoutMs: rt.timeoutMs ?? 90_000,
+          exactPath: rt.navigateExact ?? false,
         })
         return null
       } catch (e) {
@@ -171,6 +200,7 @@ export async function executePlaywrightCoreTool(input: PlaywrightCoreInput): Pro
         if (held) return held
         return attachHeldSessionForTargetUrl(sid, targetUrl, {
           navigationTimeoutMs: rt.timeoutMs ?? 90_000,
+          exactPath: rt.navigateExact ?? false,
         })
       }
       if (!rawSid) {
@@ -179,6 +209,12 @@ export async function executePlaywrightCoreTool(input: PlaywrightCoreInput): Pro
       }
       const held = getPlaywrightSessionPage(sid)
       if (held) return held
+      if (rt.forceNavigate && targetUrl) {
+        return ensureHeldSessionAtUrl(sid, targetUrl, {
+          navigationTimeoutMs: rt.timeoutMs ?? 90_000,
+          exactPath: rt.navigateExact ?? false,
+        })
+      }
       disposeTemporarySession = true
       return createHeldSessionBlankPage(sid, { pageUrl: targetUrl })
     }

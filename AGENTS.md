@@ -14,6 +14,7 @@
 - 服务端请求 API 已异步化时注意与 Nest / Node 版本一致。
 - 不要提交密钥、`.env`、`.agent-cache/`、`.pnpm-store/`。
 - 与用户交流：**中文**（若用户另有说明则从其说明）。
+- **Playwright 网络/链下拉**：禁止在测试代码或 prompt 中鼓励 `nth-child` 选选项；须 `filter({ hasText })`。见 `.cursor/rules/playwright-network-dropdown.mdc`；**不要**在 `test-code-agent.ts` 用 regex 事后替换 selector。
 
 ## 文档
 

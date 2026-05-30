@@ -12,8 +12,9 @@ import {
   wrapCompressedHtmlWithChunkMarkers,
 } from './prompts/parse-html-agent.prompt'
 import { agentObservation } from './agent-observation'
+import { isFirstPipelineSubtask, promptPageUrl, resolveSubtaskTargetUrl, syncRunnerPageUrlState } from '../lib/runner-page-url'
 import { fileCacheService } from '../lib/file-cache'
-import { mergeLiveElementsIntoDsl, probeLivePageElements } from '../lib/dsl-live-enrichment'
+import { mergeLiveElementsIntoDsl, normalizePageDslSelectors, probeLivePageElements } from '../lib/dsl-live-enrichment'
 import { getPlaywrightSessionPage } from '../lib/playwright-browser-session'
 import { runSkill } from '../skills'
 import type { SkillRunContext } from '../skills/skill-types'
@@ -157,19 +158,56 @@ function summarizeExistingIdsForPrompt(dsl: PageDSL): string {
   return JSON.stringify(payload, null, 2)
 }
 
-async function resolvePageHtml(state: State, skillCtx: SkillRunContext): Promise<string> {
-  let pageHtml = (await fileCacheService.readHtmlSnapshotByPageUrl(state.pageUrl)) ?? ''
-  if (state.runnerSessionId?.trim() && state.usePlaywrightBrowser) {
-    const refreshed = await runSkill('get-html', skillCtx, {
-      phase: 'cdp_refresh',
-      sessionId: state.runnerSessionId.trim(),
-      pageUrl: state.pageUrl,
-    })
-    if (refreshed['ok'] === true && typeof refreshed['pageHtml'] === 'string' && refreshed['pageHtml'].trim()) {
-      pageHtml = refreshed['pageHtml'] as string
+async function resolvePageHtml(
+  state: State,
+  skillCtx: SkillRunContext,
+  targetUrl: string,
+  task?: ReturnType<typeof findStepByTaskId>,
+): Promise<{ html: string; runnerSessionId?: string }> {
+  const firstSubtask = isFirstPipelineSubtask(task)
+  const navigateUrl = firstSubtask ? promptPageUrl(state) || targetUrl : targetUrl
+
+  if (state.usePlaywrightBrowser) {
+    const sid = state.runnerSessionId?.trim()
+    if (sid) {
+      const refreshed = await runSkill('get-html', skillCtx, {
+        phase: 'cdp_refresh',
+        sessionId: sid,
+        pageUrl: navigateUrl,
+        subtask: task,
+        ...(firstSubtask ? { forceNavigate: true } : {}),
+      })
+      if (refreshed['ok'] === true && typeof refreshed['pageHtml'] === 'string' && refreshed['pageHtml'].trim()) {
+        return { html: refreshed['pageHtml'] as string }
+      }
+      if (firstSubtask) {
+        throw new Error(
+          `首子任务 CDP 跳转失败：${String(refreshed['error'] ?? '无法刷新 HTML')}（目标 ${navigateUrl}）`,
+        )
+      }
+    } else if (firstSubtask) {
+      const cap = await runSkill('get-html', skillCtx, {
+        phase: 'capture',
+        pageUrl: navigateUrl,
+        headless: state.playwrightHeadless ?? false,
+        slowMoMs: state.playwrightSlowMoMs ?? 0,
+      })
+      if (cap['ok'] === true && typeof cap['pageHtml'] === 'string' && typeof cap['sessionId'] === 'string') {
+        return { html: cap['pageHtml'] as string, runnerSessionId: cap['sessionId'] as string }
+      }
+      throw new Error(`首子任务无法打开页面：${String(cap['error'] ?? 'capture 失败')}`)
     }
   }
-  return pageHtml
+
+  if (firstSubtask) {
+    throw new Error('首子任务需要 Playwright 会话以通过 CDP 跳转到提示词 URL')
+  }
+
+  const pageHtml =
+    (await fileCacheService.readHtmlSnapshotByPageUrl(targetUrl)) ??
+    (await fileCacheService.readHtmlSnapshotByPageUrl(state.pageUrl)) ??
+    ''
+  return { html: pageHtml }
 }
 
 async function persistHtmlSnapshot(
@@ -349,8 +387,16 @@ export async function parseHtmlAgentNode(state: State) {
   }
   const skillCtx = { state, agentName: 'parseHtmlAgent' as const, taskId, emit }
 
-  const pageHtml = await resolvePageHtml(state, skillCtx)
-  await persistHtmlSnapshot(state.pageUrl, pageHtml, skillCtx, task?.cacheKey)
+  const targetUrl = resolveSubtaskTargetUrl(state, task)
+  const firstSubtask = isFirstPipelineSubtask(task)
+
+  const { html: pageHtml, runnerSessionId: newRunnerSessionId } = await resolvePageHtml(
+    state,
+    skillCtx,
+    targetUrl,
+    task,
+  )
+  await persistHtmlSnapshot(targetUrl, pageHtml, skillCtx, task?.cacheKey)
 
   const compressed = await runSkill('compress-html', skillCtx, { html: pageHtml })
   const sourceForLlm = compressedSourceForLlm(compressed, pageHtml)
@@ -358,13 +404,13 @@ export async function parseHtmlAgentNode(state: State) {
   const htmlLlmSegments =
     !sourceForLlm.trim() ? 0 : sourceForLlm.length <= maxChunk ? 1 : splitCompressedHtmlIntoChunks(sourceForLlm, maxChunk).length
 
-  const { dsl: fromLlm, llmChunks } = await dslFromLlm(sourceForLlm, state.pageUrl, pageHtml, {
+  const { dsl: fromLlm, llmChunks } = await dslFromLlm(sourceForLlm, targetUrl, pageHtml, {
     stepIndex: task?.testStepIndex,
     stepTitle: fragmentTitleForParseTask(state, task),
   })
-  let dsl: PageDSL = fromLlm ?? minimalDsl(state.pageUrl, pageHtml)
+  let dsl: PageDSL = fromLlm ?? minimalDsl(targetUrl, pageHtml)
 
-  const sid = state.runnerSessionId?.trim()
+  const sid = (newRunnerSessionId ?? state.runnerSessionId)?.trim()
   if (sid && state.usePlaywrightBrowser) {
     const page = getPlaywrightSessionPage(sid)
     if (page) {
@@ -377,12 +423,16 @@ export async function parseHtmlAgentNode(state: State) {
     }
   }
 
-  const dslRelativePath = await persistDslSnapshot(dsl, dslCacheKey, state.pageUrl, skillCtx)
+  dsl = normalizePageDslSelectors(dsl)
+
+  const dslRelativePath = await persistDslSnapshot(dsl, dslCacheKey, targetUrl, skillCtx)
 
   const chunked = htmlLlmSegments > 1
 
   return {
     pageDSL: dsl,
+    ...(newRunnerSessionId ? { runnerSessionId: newRunnerSessionId, usePlaywrightBrowser: true } : {}),
+    runnerPageUrl: firstSubtask ? promptPageUrl(state) || syncRunnerPageUrlState(state) : syncRunnerPageUrlState(state),
     agentOutputs: { parseHtmlAgent: { status: 'done', data: dsl } },
     taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'done') : state.taskPlan,
     streamEvents: [

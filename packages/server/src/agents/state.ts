@@ -140,6 +140,8 @@ export const BrowserTestState = Annotation.Root({
   /** GitHub 用户 id（JWT sub）；未登录时为空 */
   userId: Annotation<string | undefined>(),
   pageUrl: Annotation<string>(),
+  /** 浏览器当前页 URL（首屏等于 pageUrl；每段 test 执行后更新），供 get-html / run_test 等子任务使用 */
+  runnerPageUrl: Annotation<string>(),
   /** Playwright 托管会话 id（与 CDP 打开的页签对应）；空表示未启用 */
   runnerSessionId: Annotation<string>(),
   /** true：启用 Playwright；HTML 快照见 `.agent-cache/html`，解析/分析前按需 CDP 刷新并回写该文件 */

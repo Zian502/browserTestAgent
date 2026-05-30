@@ -110,6 +110,8 @@ function PlayIcon() {
   )
 }
 
+export { PlayIcon }
+
 function CloseIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
@@ -228,33 +230,16 @@ export function RunTestCodeModal(props: {
   open: boolean
   onClose: () => void
   params: RunTestCodeModalParams | null
+  /** 打开后自动执行一次（用于列表「执行」快捷按钮） */
+  autoRun?: boolean
 }) {
-  const { open, onClose, params } = props
+  const { open, onClose, params, autoRun = false } = props
   const [code, setCode] = useState('')
   const [running, setRunning] = useState(false)
   const [resultText, setResultText] = useState<string | null>(null)
+  const autoRunDoneRef = useRef(false)
 
-  useEffect(() => {
-    if (open && params) {
-      setCode(params.code)
-      setResultText(null)
-    }
-  }, [open, params])
-
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
-
-  if (!open || !params) return null
-  /** 内联 async 闭包无法继承对 `params` 的收窄，用局部常量固定本次渲染的非空快照 */
-  const modalParams = params
-
-  async function handleRun() {
+  const runTest = useCallback(async (modalParams: RunTestCodeModalParams, sourceCode: string) => {
     setRunning(true)
     setResultText(null)
     try {
@@ -263,7 +248,7 @@ export function RunTestCodeModal(props: {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId: modalParams.sessionId,
-          code,
+          code: sourceCode,
           targetUrl: modalParams.targetUrl,
           timeoutMs: modalParams.timeoutMs,
         }),
@@ -297,6 +282,36 @@ export function RunTestCodeModal(props: {
     } finally {
       setRunning(false)
     }
+  }, [])
+
+  useEffect(() => {
+    if (open && params) {
+      setCode(params.code)
+      setResultText(null)
+      autoRunDoneRef.current = false
+    }
+  }, [open, params])
+
+  useEffect(() => {
+    if (!open || !params || !autoRun || autoRunDoneRef.current) return
+    autoRunDoneRef.current = true
+    void runTest(params, params.code)
+  }, [open, params, autoRun, runTest])
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  if (!open || !params) return null
+  const modalParams = params
+
+  function handleRun() {
+    void runTest(modalParams, code)
   }
 
   return (

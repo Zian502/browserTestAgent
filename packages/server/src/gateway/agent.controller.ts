@@ -219,6 +219,7 @@ export class AgentController {
         userInput: body.userInput,
         userId,
         pageUrl,
+        runnerPageUrl: pageUrl,
         runnerSessionId: '',
         usePlaywrightBrowser: usePw,
         playwrightHeadless: body.headless ?? false,

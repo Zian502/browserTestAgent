@@ -9,6 +9,7 @@ import {
   isPlaywrightCdpFallbackLaunchEnabled,
   listOpenPageUrls,
   pagePathMatchesTargetUrl,
+  pageIsAtOrBelowTargetUrl,
 } from './playwright-cdp-connect'
 
 export {
@@ -29,6 +30,8 @@ export type PlaywrightSessionLaunchOptions = {
    * 需要与旧版行为一致时可显式传 `load`。
    */
   waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'commit'
+  /** true：导航时仅 pathname 完全一致才跳过 goto（首子任务 / merge 用） */
+  exactPath?: boolean
 }
 
 type HeldSession = {
@@ -84,7 +87,11 @@ export async function ensurePageAtTargetUrl(
   if (!url) return
   const navTimeout = opts.navigationTimeoutMs ?? 90_000
   page.setDefaultNavigationTimeout(navTimeout)
-  if (pagePathMatchesTargetUrl(page.url(), url)) return
+  const href = page.url()
+  const matches = opts.exactPath
+    ? pagePathMatchesTargetUrl(href, url)
+    : pagePathMatchesTargetUrl(href, url) || pageIsAtOrBelowTargetUrl(href, url)
+  if (matches) return
   await page.goto(url, {
     waitUntil: opts.waitUntil ?? 'domcontentloaded',
     timeout: navTimeout,
@@ -112,7 +119,12 @@ async function acquireBrowserPageAttachOnly(
     )
   }
   await page.bringToFront().catch(() => {})
-  await ensurePageAtTargetUrl(page, url, opts)
+  const navOpts: PlaywrightSessionLaunchOptions = {
+    ...opts,
+    /** 显式目标 URL 时默认精确 pathname，避免 SPA 子路径（如充值页）被当成已到达 /zh */
+    exactPath: opts.exactPath ?? true,
+  }
+  await ensurePageAtTargetUrl(page, url, navOpts)
   return { browser, context: page.context(), page, external: true }
 }
 
@@ -128,7 +140,7 @@ async function acquireLaunchedBrowserPage(
   const browser = await launchChromeLikeBrowser(opts)
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
   const page = await context.newPage()
-  await ensurePageAtTargetUrl(page, pageUrl, opts)
+  await ensurePageAtTargetUrl(page, pageUrl, { ...opts, exactPath: opts.exactPath ?? true })
   return { browser, context, page, external: false }
 }
 
@@ -142,7 +154,7 @@ async function acquireBrowserPage(
     if (active) {
       const held = await acquireBrowserPageAttachOnly(pageUrl, opts)
       console.warn(
-        `[playwright] CDP 挂接 ${endpoint}，复用页签: ${held.page.url()}`,
+        `[playwright] CDP 挂接 ${endpoint}，页签: ${held.page.url()}（目标 ${pageUrl.trim()}）`,
       )
       return held
     }
@@ -228,6 +240,37 @@ export async function openPageAndCaptureHtmlViaCDP(
 
 export function getPlaywrightSessionPage(sessionId: string): Page | undefined {
   return sessions.get(sessionId)?.page
+}
+
+/**
+ * 取得或挂接 CDP 会话页签，并导航到目标 URL（首子任务默认入口）。
+ * 会话未登记时会在 CDP 挂接模式下重新 attach 到 Chrome 页签。
+ */
+export async function ensureHeldSessionAtUrl(
+  sessionId: string,
+  pageUrl: string,
+  opts: PlaywrightSessionLaunchOptions = {},
+): Promise<Page> {
+  const sid = sessionId.trim()
+  const url = pageUrl.trim()
+  if (!sid || !url) {
+    throw new Error('ensureHeldSessionAtUrl 需要 sessionId 与 pageUrl')
+  }
+
+  const existing = getPlaywrightSessionPage(sid)
+  if (existing) {
+    await ensurePageAtTargetUrl(existing, url, opts)
+    return existing
+  }
+
+  if (await isPlaywrightCdpAttachActive()) {
+    return attachHeldSessionForTargetUrl(sid, url, opts)
+  }
+
+  await openPageAndCaptureHtmlViaCDP(sid, url, opts)
+  const page = getPlaywrightSessionPage(sid)
+  if (!page) throw new Error('无法建立 Playwright 会话')
+  return page
 }
 
 export async function refreshSessionPageHtmlViaCDP(sessionId: string): Promise<string | null> {

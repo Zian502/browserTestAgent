@@ -127,11 +127,16 @@ export type GetPageContextOptions = {
 
 /**
  * 供 Agent 请求体中的 pageUrl：
- * - 扩展内：读当前激活标签页的 URL
- * - Web：**优先** sessionStorage（loadWebPageContext）；否则从 **webComposerText**（输入框内容）解析首个 http(s) URL
+ * - 扩展内：**优先**从用户输入（webComposerText）解析首个 http(s) URL；否则读当前激活标签页
+ * - Web：**优先** sessionStorage；否则从 **webComposerText** 解析
  */
 export async function getPageContextForAgent(opts?: GetPageContextOptions): Promise<PageContextPayload> {
+  const fromInput = opts?.webComposerText ? extractPageUrlFromInputText(opts.webComposerText) : null
+
   if (isExtensionRuntime()) {
+    if (fromInput && isAcceptablePageUrl(fromInput)) {
+      return { pageUrl: fromInput }
+    }
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
     if (!tab?.id || !tab.url) {
       throw new Error('无法获取当前标签页')
@@ -139,16 +144,15 @@ export async function getPageContextForAgent(opts?: GetPageContextOptions): Prom
     return { pageUrl: tab.url }
   }
 
+  if (fromInput && isAcceptablePageUrl(fromInput)) {
+    return { pageUrl: fromInput }
+  }
+
   const saved = loadWebPageContext()
   const savedRaw = saved?.pageUrl?.trim() ?? ''
   const savedUrl = savedRaw ? sanitizePageUrlString(savedRaw) : null
   if (savedUrl && isAcceptablePageUrl(savedUrl)) {
     return { pageUrl: savedUrl }
-  }
-
-  const fromInput = opts?.webComposerText ? extractPageUrlFromInputText(opts.webComposerText) : null
-  if (fromInput) {
-    return { pageUrl: fromInput }
   }
 
   return { pageUrl: '' }

@@ -1,6 +1,12 @@
 import { invokePlaywrightTool } from './tool-invoker'
 import type { SkillDefinition } from './skill-types'
 import { runTestInjectedEnvKeyNames } from '../lib/run-test-env'
+import {
+  effectiveRunnerPageUrl,
+  resolveSubtaskTargetUrl,
+  shouldForceNavigateToPromptUrl,
+  type SubtaskStepRef,
+} from '../lib/runner-page-url'
 
 /**
  * 在已有 Playwright CDP 会话页签中执行 `@playwright/test` 风格源码（经 `playwright` 工具 `run_test`）。
@@ -14,7 +20,12 @@ export const runTestCodeSkill: SkillDefinition = {
   async run(ctx, input) {
     const sessionId = String(input['sessionId'] ?? ctx.state.runnerSessionId ?? '').trim()
     const code = String(input['code'] ?? '')
-    const targetUrl = String(input['targetUrl'] ?? ctx.state.pageUrl ?? '')
+    const subtask = input['subtask'] as SubtaskStepRef | undefined
+    const targetUrl = String(
+      input['targetUrl'] ?? resolveSubtaskTargetUrl(ctx.state, subtask) ?? effectiveRunnerPageUrl(ctx.state) ?? '',
+    )
+    const forceNavigate =
+      Boolean(input['forceNavigate']) || shouldForceNavigateToPromptUrl(subtask)
     const timeoutMs = input['timeoutMs'] != null ? Number(input['timeoutMs']) : 90_000
     if (!sessionId) {
       return { ok: false, error: '缺少 Playwright 会话 sessionId' }
@@ -25,6 +36,7 @@ export const runTestCodeSkill: SkillDefinition = {
       code,
       targetUrl,
       timeoutMs,
+      ...(forceNavigate ? { forceNavigate: true, navigateExact: true } : {}),
       /** 仅键名，供观测；具体值在 runner 内从 process.env 注入，不经过本 payload */
       injectedEnvKeys: runTestInjectedEnvKeyNames(),
     })

@@ -6,8 +6,8 @@ export const REVIEW_AGENT_SYSTEM_PROMPT =
   '1. **结论**：一句话说明失败性质（断言失败 / selector 无效 / 超时 / 环境等）。\n' +
   '2. **直接原因**：引用日志中的关键报错（勿编造未出现的错误）。\n' +
   '3. **可能根因**：2–4 条 bullet，结合页面场景推断（如 selector 臆造、URL 断言过窄、混淆币种与网络下拉等）。\n' +
-  '4. **修复建议**：2–4 条具体改法（优先改 selector / 断言 / 前置步骤，而非空泛「检查网络」）。\n' +
-  ' **禁止**输出完整测试代码；**禁止**重复粘贴整段 runner 日志；日志过长时只摘取与失败段相关的 10–30 行。'
+  '4. **修复建议**：2–4 条具体改法（优先改 selector / 断言 / 前置步骤，而非空泛「检查网络」）。若代码含 `.item:nth-child(N)` / `.nth(N)` 选网络/链选项，须建议改为 `filter({ hasText: /ETH|Ethereum/i })` 等文案匹配，并说明 nth-child 在 `.select-view` 内顺序不可靠。\n' +
+  ' **禁止**输出完整测试代码；**禁止**重复粘贴整段 runner 日志；日志过长时只摘取与失败段相关的 10–30 行。**禁止**建议用服务端 regex 事后替换 generated code；修复应通过 **test-code-agent 提示词** 让 LLM 生成正确 selector。'
 
 export function buildReviewAgentUserMessage(ctx: TestReviewContext): string {
   const logBlob = ctx.logs.join('\n')

@@ -13,6 +13,12 @@ import {
 } from './prompts/test-code-agent.prompt'
 import { agentObservation } from './agent-observation'
 import { buildRunTestInjectedEnv } from '../lib/run-test-env'
+import {
+  resolveSubtaskTargetUrl,
+  runnerPageUrlStatePatch,
+  shouldForceNavigateToPromptUrl,
+  syncRunnerPageUrlState,
+} from '../lib/runner-page-url'
 import { mergeTestCodeFragments } from '../lib/test-code-merge'
 import { runSkill } from '../skills'
 import * as path from 'path'
@@ -63,6 +69,30 @@ function rewriteInjectedEnvAccessors(code: string): string {
   return out
 }
 
+/** 修正 LLM 易触发的 strict mode / 臆造 selector（已知坏模式） */
+function rewriteStrictModeRiskyLocators(code: string): string {
+  let out = code
+  out = out.replace(/(\.address-input)\s+(?:div|span)\.(input|select-view)/g, '$1 .$2')
+  const networkScoped =
+    "page.locator('.address-input').filter({ hasText: /网络|網路|选择|選擇/ })"
+  const networkTrigger = `${networkScoped}.locator('.input input, .select-view').first()`
+  out = out
+    .replace(/page\.locator\(\s*['"]\.address-input\s+\.arrow['"]\s*\)/g, networkTrigger)
+    .replace(/(?<!page\.)locator\(\s*['"]\.address-input\s+\.arrow['"]\s*\)/g, networkTrigger)
+    .replace(/page\.locator\(\s*['"]\.address-input\s+\.input['"]\s*\)/g, networkTrigger)
+    .replace(/(?<!page\.)locator\(\s*['"]\.address-input\s+\.input['"]\s*\)/g, networkTrigger)
+    .replace(
+      /\.locator\(\s*['"]div\.input input['"]\s*\)/g,
+      ".locator('.input input')",
+    )
+    .replace(
+      /\.locator\(\s*['"]div\.select-view['"]\s*\)/g,
+      ".locator('.select-view')",
+    )
+    .replace(/\.locator\(\s*['"]\.overlay\s+\.remove-overlay-btn['"]\s*\)/g, ".locator('.remove-overlay-btn')")
+  return out
+}
+
 function findParseCacheKeyForFragment(state: State, groupId: string, stepIndex: number): string | undefined {
   for (const main of state.taskPlan) {
     if (main.id !== groupId) continue
@@ -104,10 +134,11 @@ async function generateTestCode(
 
   const isFragment = task?.testStepRole === 'fragment'
   const stepTitle = task?.title?.trim() ?? ''
+  const activePageUrl = resolveSubtaskTargetUrl(state, task)
 
   let code = reuseOpenPage
     ? `import { test, expect } from '@playwright/test';\n\ntest('smoke', async ({ page }) => {\n  await expect(page.locator('body')).toBeVisible();\n});\n`
-    : `import { test, expect } from '@playwright/test';\n\ntest('smoke', async ({ page }) => {\n  await page.goto('${state.pageUrl}');\n  await expect(page).toHaveTitle(/.+/);\n});\n`
+    : `import { test, expect } from '@playwright/test';\n\ntest('smoke', async ({ page }) => {\n  await page.goto('${activePageUrl}');\n  await expect(page).toHaveTitle(/.+/);\n});\n`
 
   if (hasChatLlm()) {
     const model = createChatLlm({ temperature: 0.1 })
@@ -117,14 +148,14 @@ async function generateTestCode(
         ? getFragmentStepContext(state, task.groupId, task.testStepIndex ?? 0)
         : undefined
     const userContent = isFragment
-      ? buildTestCodeFragmentUserMessage(stepTitle, state.userInput, dslJson, state.pageUrl, {
+      ? buildTestCodeFragmentUserMessage(stepTitle, state.userInput, dslJson, activePageUrl, {
           reuseOpenPage,
           stepIndex: stepCtx?.stepIndex,
           totalSteps: stepCtx?.totalSteps,
           priorStepTitles: stepCtx?.priorStepTitles,
           dsl,
         })
-      : buildTestCodeUserMessage(state.userInput, dslJson, state.pageUrl, {
+      : buildTestCodeUserMessage(state.userInput, dslJson, activePageUrl, {
           reuseOpenPage,
           stepTitle: stepTitle || undefined,
           dsl,
@@ -134,7 +165,7 @@ async function generateTestCode(
       { role: 'system', content: isFragment ? TEST_CODE_FRAGMENT_SYSTEM_PROMPT : TEST_CODE_AGENT_SYSTEM_PROMPT },
       { role: 'user', content: userContent },
     ])
-    code = rewriteInjectedEnvAccessors(extractCode(extractMessageText(fullCodeResp.content)))
+    code = rewriteStrictModeRiskyLocators(rewriteInjectedEnvAccessors(extractCode(extractMessageText(fullCodeResp.content))))
   }
 
   return code
@@ -142,19 +173,24 @@ async function generateTestCode(
 
 async function runGeneratedTest(
   state: State,
+  task: ReturnType<typeof findStepByTaskId>,
   taskId: string | undefined,
   code: string,
   emit: (e: StreamEvent) => void,
   testStepRole?: string,
 ) {
+  const targetUrl = resolveSubtaskTargetUrl(state, task)
+  const forceNavigate = shouldForceNavigateToPromptUrl(task)
   return runSkill(
     'run-test-code',
     { state, agentName: 'testCodeAgent', taskId, emit },
     {
       code,
-      targetUrl: state.pageUrl,
+      targetUrl,
       sessionId: state.runnerSessionId,
       timeoutMs: 90_000,
+      subtask: task,
+      ...(forceNavigate ? { forceNavigate: true } : {}),
       ...(testStepRole ? { testStepRole } : {}),
     },
   )
@@ -245,7 +281,7 @@ function buildTestReviewContext(
   return {
     taskId: task?.id,
     taskTitle: task?.title,
-    pageUrl: state.pageUrl,
+    pageUrl: syncRunnerPageUrlState(state),
     userInput: state.userInput,
     error: run.error,
     passed: run.passed,
@@ -266,6 +302,7 @@ function routeTestExecutionFailure(
     goto: 'reviewAgent',
     update: {
       ...partial,
+      ...runnerPageUrlStatePatch(state),
       testReviewContext: buildTestReviewContext(state, task, run, code),
       taskPlan: skipPendingTasks(partial.taskPlan ?? state.taskPlan),
     },
@@ -333,7 +370,7 @@ export async function testCodeAgentNode(state: State, config?: LangGraphRunnable
     }
 
     const code = mergeTestCodeFragments(fragmentCodes)
-    const out = await runGeneratedTest(state, taskId, code, emit, 'merge')
+    const out = await runGeneratedTest(state, task, taskId, code, emit, 'merge')
     const run = parseTestRunOutput(out as Record<string, unknown>)
 
     const persistKey = cacheKey ?? `${state.pageUrl}::${groupId}::merged`
@@ -402,6 +439,7 @@ export async function testCodeAgentNode(state: State, config?: LangGraphRunnable
           data: { code, testResult, merged: true, ...persisted, github: githubOutcome ?? null },
         },
       },
+      ...runnerPageUrlStatePatch(state),
       taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'done') : state.taskPlan,
       streamEvents: [
         ...streamEvents,
@@ -471,7 +509,7 @@ export async function testCodeAgentNode(state: State, config?: LangGraphRunnable
     const fragmentRel = `testCode/fragments/${fileCacheService.artifactIdFromKey(fragment.cacheKey)}.ts`
     await fileCacheService.writeFile(fragmentRel, code)
 
-    const out = await runGeneratedTest(state, taskId, code, emit, 'fragment')
+    const out = await runGeneratedTest(state, task, taskId, code, emit, 'fragment')
     const run = parseTestRunOutput(out as Record<string, unknown>)
 
     if (isTestExecutionFailure(run)) {
@@ -513,6 +551,7 @@ export async function testCodeAgentNode(state: State, config?: LangGraphRunnable
 
     return {
       testCodeFragments: { [groupId]: [fragment] },
+      ...runnerPageUrlStatePatch(state),
       agentOutputs: {
         testCodeAgent: {
           status: 'done',
@@ -566,7 +605,7 @@ export async function testCodeAgentNode(state: State, config?: LangGraphRunnable
     }
   }
 
-  const out = await runGeneratedTest(state, taskId, code, emit, task?.testStepRole)
+  const out = await runGeneratedTest(state, task, taskId, code, emit, task?.testStepRole)
   const run = parseTestRunOutput(out as Record<string, unknown>)
 
   const persistKey = cacheKey ?? `${state.pageUrl}::${state.userInput}::testCode`
@@ -635,6 +674,7 @@ export async function testCodeAgentNode(state: State, config?: LangGraphRunnable
 
   return {
     agentOutputs: { testCodeAgent: doneOutput },
+    ...runnerPageUrlStatePatch(state),
     taskPlan: taskId ? updateStatus(state.taskPlan, taskId, 'done') : state.taskPlan,
     streamEvents: [
       ...streamEvents,

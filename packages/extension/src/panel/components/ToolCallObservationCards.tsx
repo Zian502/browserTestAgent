@@ -3,7 +3,7 @@ import { useTaskStore, type AgentObservationLogEntry } from '../stores/task-stor
 import { AGENT_API_BASE } from '../agent-api-base'
 import { authFetch } from '../auth/auth-api'
 import { MarkdownFromStaticText } from './MarkdownFromStaticText'
-import { RunTestCodeModal, type RunTestCodeModalParams } from './RunTestCodeModal'
+import { RunTestCodeModal, PlayIcon, type RunTestCodeModalParams } from './RunTestCodeModal'
 
 /** 与 `packages/server/src/agents/state.ts` 中 StreamEvent.type 对齐（含 MCP 观测） */
 type InvocationStreamKind =
@@ -312,27 +312,8 @@ function extractRunTestCodeParamsFromObservationData(data: unknown): RunTestCode
   }
 }
 
-function runTestStepRoleFromObservationData(data: unknown): string | undefined {
-  if (!data || typeof data !== 'object') return undefined
-  const root = data as Record<string, unknown>
-  const input = root.input
-  if (!input || typeof input !== 'object') return undefined
-  const role = (input as Record<string, unknown>).testStepRole
-  return typeof role === 'string' ? role : undefined
-}
-
-/** 片段阶段的 run-test-code 不展示「打开编辑器并执行」按钮，仅合并后的完整 spec 展示。 */
-function shouldShowRunTestCodeExecuteButton(card: MergedInvocationCard): boolean {
-  if (!isRunTestCodeSkill(card)) return false
-  const role =
-    runTestStepRoleFromObservationData(card.callEntry?.data) ??
-    runTestStepRoleFromObservationData(card.resultEntry?.data)
-  return role !== 'fragment'
-}
-
-function runTestCodeModalParamsFromCard(card: MergedInvocationCard): RunTestCodeModalParams | null {
+function runTestCodeParamsFromCard(card: MergedInvocationCard): RunTestCodeModalParams | null {
   if (!isRunTestCodeSkill(card)) return null
-  if (!shouldShowRunTestCodeExecuteButton(card)) return null
   return (
     extractRunTestCodeParamsFromObservationData(card.callEntry?.data) ??
     extractRunTestCodeParamsFromObservationData(card.resultEntry?.data)
@@ -524,12 +505,27 @@ const codeActionBtn: CSSProperties = {
   transition: 'background 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease',
 }
 
+function actionBtnStyle(hover: boolean, focus: boolean, accent?: 'blue' | 'green'): CSSProperties {
+  const isGreen = accent === 'green'
+  return {
+    ...codeActionBtn,
+    marginTop: 2,
+    background: hover ? '#f4f4f5' : '#ffffff',
+    borderColor: hover ? '#d4d4d8' : '#e4e4e7',
+    color: hover ? (isGreen ? '#15803d' : '#2563eb') : '#52525b',
+    boxShadow: focus ? '0 0 0 2px #ffffff, 0 0 0 4px #93c5fd' : 'none',
+  }
+}
+
 function InvocationCard(props: { card: MergedInvocationCard }) {
   const [open, setOpen] = useState(false)
   const [codeModalOpen, setCodeModalOpen] = useState(false)
+  const [codeModalAutoRun, setCodeModalAutoRun] = useState(false)
   const [codeModalParams, setCodeModalParams] = useState<RunTestCodeModalParams | null>(null)
-  const [codeBtnHover, setCodeBtnHover] = useState(false)
-  const [codeBtnFocus, setCodeBtnFocus] = useState(false)
+  const [viewCodeBtnHover, setViewCodeBtnHover] = useState(false)
+  const [viewCodeBtnFocus, setViewCodeBtnFocus] = useState(false)
+  const [runBtnHover, setRunBtnHover] = useState(false)
+  const [runBtnFocus, setRunBtnFocus] = useState(false)
   const [reportOpeningPath, setReportOpeningPath] = useState<string | null>(null)
   const { card } = props
 
@@ -543,21 +539,23 @@ function InvocationCard(props: { card: MergedInvocationCard }) {
   const canOpenAgentHtmlReport =
     Boolean(agentReportPath) && card.status === 'done' && (isSeoAnalysisToolCard(card) || isPagespeedMcpCard(card))
 
-  const runTestSnapshot = runTestCodeModalParamsFromCard(card)
-  const canOpenRunTestCodeModal = Boolean(runTestSnapshot)
+  const runTestParams = runTestCodeParamsFromCard(card)
+  const canRunTestCodeActions = Boolean(runTestParams)
 
   const reportEntries = isReportSkill(card) ? reportEntriesFromCard(card) : []
   const canOpenReportTabs = isReportSkill(card) && reportEntries.length > 0 && card.status !== 'running'
 
-  function openRunTestCodeModal() {
-    const p = runTestCodeModalParamsFromCard(card)
+  function openRunTestCodeModal(autoRun: boolean) {
+    const p = runTestCodeParamsFromCard(card)
     if (!p) return
     setCodeModalParams(p)
+    setCodeModalAutoRun(autoRun)
     setCodeModalOpen(true)
   }
 
   function closeRunTestCodeModal() {
     setCodeModalOpen(false)
+    setCodeModalAutoRun(false)
     setCodeModalParams(null)
   }
 
@@ -663,34 +661,50 @@ function InvocationCard(props: { card: MergedInvocationCard }) {
                 )
               })
             : null}
-          {canOpenRunTestCodeModal ? (
-            <button
-              type="button"
-              style={{
-                ...codeActionBtn,
-                marginTop: 2,
-                background: codeBtnHover ? '#f4f4f5' : '#ffffff',
-                borderColor: codeBtnHover ? '#d4d4d8' : '#e4e4e7',
-                color: codeBtnHover ? '#2563eb' : '#52525b',
-                boxShadow: codeBtnFocus ? '0 0 0 2px #ffffff, 0 0 0 4px #93c5fd' : 'none',
-              }}
-              title="打开编辑器并执行测试代码"
-              aria-label="打开编辑器并执行测试代码"
-              onPointerEnter={() => setCodeBtnHover(true)}
-              onPointerLeave={() => setCodeBtnHover(false)}
-              onFocus={() => setCodeBtnFocus(true)}
-              onBlur={() => setCodeBtnFocus(false)}
-              onClick={(e) => {
-                e.preventDefault()
-                openRunTestCodeModal()
-              }}
-            >
-              <CodeEditorGlyph size={14} />
-            </button>
+          {canRunTestCodeActions ? (
+            <>
+              <button
+                type="button"
+                style={actionBtnStyle(viewCodeBtnHover, viewCodeBtnFocus, 'blue')}
+                title="查看代码"
+                aria-label="查看代码"
+                onPointerEnter={() => setViewCodeBtnHover(true)}
+                onPointerLeave={() => setViewCodeBtnHover(false)}
+                onFocus={() => setViewCodeBtnFocus(true)}
+                onBlur={() => setViewCodeBtnFocus(false)}
+                onClick={(e) => {
+                  e.preventDefault()
+                  openRunTestCodeModal(false)
+                }}
+              >
+                <CodeEditorGlyph size={14} />
+              </button>
+              <button
+                type="button"
+                style={actionBtnStyle(runBtnHover, runBtnFocus, 'green')}
+                title="执行测试"
+                aria-label="执行测试"
+                onPointerEnter={() => setRunBtnHover(true)}
+                onPointerLeave={() => setRunBtnHover(false)}
+                onFocus={() => setRunBtnFocus(true)}
+                onBlur={() => setRunBtnFocus(false)}
+                onClick={(e) => {
+                  e.preventDefault()
+                  openRunTestCodeModal(true)
+                }}
+              >
+                <PlayIcon />
+              </button>
+            </>
           ) : null}
         </div>
       </div>
-      <RunTestCodeModal open={codeModalOpen} onClose={closeRunTestCodeModal} params={codeModalParams} />
+      <RunTestCodeModal
+        open={codeModalOpen}
+        onClose={closeRunTestCodeModal}
+        params={codeModalParams}
+        autoRun={codeModalAutoRun}
+      />
       {open ? (
         <div
           style={{

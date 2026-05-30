@@ -1,0 +1,46 @@
+---
+description: Playwright 网络/链下拉选项定位 — 禁止 nth-child，须 filter({ hasText })
+globs: packages/server/src/agents/prompts/**/*.ts,packages/server/src/agents/test-code-agent.ts,packages/server/src/agents/parse-html-agent.ts
+alwaysApply: false
+---
+
+# 网络/链下拉选项（Playwright 测试生成）
+
+## 问题
+
+充值页等场景下，LLM 易生成 `page.locator('.address-input .select-view .item:nth-child(3)')` 选 ETH。`.select-view` 内 DOM 顺序与 parse DSL 里 `.address-input .item:nth-child(N)` **不一致**，常点到 Tron 等错误选项，导致 `toHaveValue(/ETH|Ethereum/i)` 失败。
+
+## 禁止（测试代码）
+
+- `:nth-child(N)`、`:nth-of-type(N)`、`.nth(N)` 选下拉**选项**
+- 把 DSL 中 `network-*` 的 `:nth-child` selector **原样抄进** Playwright
+- 在 `page.locator()` CSS 字符串里写 `:has-text()` / `:contains()`
+
+## 必须（测试代码）
+
+- 选项：`page.locator('.address-input .select-view .item').filter({ hasText: /ETH|Ethereum/i })`
+- 或 `getByRole('option', { name: /ETH/i })`（语义允许时）
+- 打开下拉后：`await expect(page.locator('.address-input .select-view')).toBeVisible()`
+- 遮罩：先 click `.remove-overlay-btn`（若 DSL 有）
+
+## parseHtmlAgent（DSL）
+
+- 每个网络选项单独 element（`network-eth` 等）
+- `selector` 统一 `.address-input .select-view .item`（**无** nth-child）
+- 完整文案写入 `text`，供 testCodeAgent 做 hasText 匹配
+
+## 实现约定
+
+- 规则写在 **`test-code-agent.prompt.ts`**（`NETWORK_DROPDOWN_SELECTOR_RULES`）与 **`parse-html-agent.prompt.ts`**
+- **不要**在 `test-code-agent.ts` 用 regex 事后改写 nth-child；靠提示词与 DSL 约束生成正确代码
+- 修改相关 prompt 时同步更新本 rule
+
+## 正/反例
+
+```typescript
+// ❌ 禁止
+page.locator('.address-input .select-view .item:nth-child(3)')
+
+// ✅ 正确
+page.locator('.address-input .select-view .item').filter({ hasText: /ETH|Ethereum/i })
+```

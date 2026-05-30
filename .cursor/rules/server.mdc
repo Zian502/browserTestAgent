@@ -12,4 +12,5 @@ alwaysApply: false
 - **Playwright**：`src/lib/playwright-browser-session.ts`；挂接本机 Chrome 见 `playwright-cdp-connect.ts`（`PLAYWRIGHT_CDP_URL` / `CHROME_CDP_URL`）；子操作见 `tools/playwright.ts` 与 `tools/index.ts` 的 `executeCoreTool`。
 - **缓存**：`src/lib/file-cache.ts`，根目录通常为 `packages/server/.agent-cache/`（运行期写入）。
 - **LLM**：`src/agents/llm-client.ts`（OpenAI 兼容；密钥与 base URL 环境变量见该文件）。
+- **测试 selector 约定**：网络/链下拉禁止 nth-child，见 `test-code-agent.prompt.ts` 的 `NETWORK_DROPDOWN_SELECTOR_RULES` 与 `.cursor/rules/playwright-network-dropdown.mdc`；勿在 agent 代码里 regex 改写选项 locator。
 - **PageSpeed**：`src/mcps/pagespeed-mcp.ts`；无 API key 时返回 stub，勿当真实性能依据。

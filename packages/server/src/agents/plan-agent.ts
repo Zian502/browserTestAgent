@@ -97,6 +97,13 @@ function defaultTestStepTitles(userInput: string, intent: string): string[] {
       '在弹框内填写账号密码并提交，断言登录结果',
     ]
   }
+  if (/快速充值|充值页|recharge|选择网络|選擇網路|eth|ethereum|erc20/i.test(u)) {
+    return [
+      '点击快速充值按钮，进入充值页',
+      '点击选择网络触发器，打开下拉列表',
+      '断言网络下拉列表可见并选择 ETH',
+    ]
+  }
   return [`生成「${intent || '需求'}」相关 Playwright 测试（保留英文 kebab 关键词便于命名）`]
 }
 
